@@ -44,6 +44,7 @@ class TabDPTEstimator(BaseEstimator):
         use_flash: bool = True,
         compile: bool = True,
         model_weight_path: str | None = None,
+        text_enhanced: bool = False,
     ):
         """
         Initializes the TabDPT Estimator
@@ -80,6 +81,7 @@ class TabDPTEstimator(BaseEstimator):
         self.inf_batch_size = inf_batch_size if self.device == "cuda" else min(inf_batch_size, CPU_INF_BATCH)
         self.use_flash = use_flash and self.device == "cuda"
         self.missing_indicators = missing_indicators
+        self.text_enhanced = text_enhanced
 
         if model_weight_path:
             self.path = model_weight_path
@@ -93,8 +95,12 @@ class TabDPTEstimator(BaseEstimator):
             model_state = {k: f.get_tensor(k) for k in f.keys()}
 
         cfg.env.device = self.device
-        self.model = TabDPTModel.load(model_state=model_state, config=cfg, use_flash=self.use_flash, clip_sigma=clip_sigma)
+        if not self.text_enhanced:
+            self.model = TabDPTModel.load(model_state=model_state, config=cfg, use_flash=self.use_flash, clip_sigma=clip_sigma)
+        else:
+            self.model = TabDPTModel.load(model_state=model_state, config=cfg, use_flash=self.use_flash, clip_sigma=clip_sigma, text_enhanced=True)
         self.model.eval()
+
 
         self.max_features = self.model.num_features
         self.max_num_classes = self.model.n_out
@@ -162,7 +168,7 @@ class TabDPTEstimator(BaseEstimator):
         if self.compile:
             self.model = torch.compile(self.model)
 
-    def _prepare_prediction(self, X: np.ndarray, class_perm: np.ndarray | None = None, seed: int | None = None):
+    def _prepare_prediction(self, X: np.ndarray, class_perm: np.ndarray | None = None, seed: int | None = None, text_enhanced_attn_weight: np.ndarray | None = None):
         check_is_fitted(self)
 
         if self.missing_indicators:
@@ -179,6 +185,9 @@ class TabDPTEstimator(BaseEstimator):
             convert_to_torch_tensor(self.y_train).to(self.device).float(),
             convert_to_torch_tensor(self.X_test).to(self.device).float(),
         )
+
+        if text_enhanced_attn_weight is not None:
+            text_enhanced_attn_weight = convert_to_torch_tensor(text_enhanced_attn_weight).to(self.device).float()
 
         # Apply PCA/subsampling to reduce the number of features if necessary
         if self.n_features > self.max_features:
@@ -197,4 +206,4 @@ class TabDPTEstimator(BaseEstimator):
             inv_perm = torch.as_tensor(inv_perm, device=train_y.device)
             train_y = inv_perm[train_y].to(torch.float)
 
-        return train_x, train_y, test_x
+        return train_x, train_y, test_x, text_enhanced_attn_weight

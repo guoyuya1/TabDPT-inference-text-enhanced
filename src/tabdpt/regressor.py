@@ -24,6 +24,7 @@ class TabDPTRegressor(TabDPTEstimator, RegressorMixin):
         use_flash: bool = True,
         compile: bool = True,
         model_weight_path: str | None = None,
+        text_enhanced: bool = False,
     ):
         super().__init__(
             mode="reg",
@@ -37,12 +38,13 @@ class TabDPTRegressor(TabDPTEstimator, RegressorMixin):
             use_flash=use_flash,
             compile=compile,
             model_weight_path=model_weight_path,
+            text_enhanced=text_enhanced,
         )
 
     @torch.no_grad()
-    def _predict(self, X: np.ndarray, context_size: int = 2048, seed: int | None = None):
-        train_x, train_y, test_x = self._prepare_prediction(X, seed=seed)
-
+    def _predict(self, X: np.ndarray, context_size: int = 2048, seed: int | None = None, text_enhanced_attn_weight: np.ndarray | None = None):
+        
+        train_x, train_y, test_x, text_enhanced_attn_weight = self._prepare_prediction(X, seed=seed, text_enhanced_attn_weight=text_enhanced_attn_weight)
         if seed is not None:
             self.faiss_knn.index.seed = seed
             feat_perm = generate_random_permutation(train_x.shape[1], seed)
@@ -50,13 +52,17 @@ class TabDPTRegressor(TabDPTEstimator, RegressorMixin):
             test_x = test_x[:, feat_perm]
 
         if context_size >= self.n_instances:
+            
             X_train = pad_x(train_x[None, :, :], self.max_features).to(self.device)
             X_test = pad_x(test_x[None, :, :], self.max_features).to(self.device)
+            if text_enhanced_attn_weight is not None:
+                text_enhanced_attn_weight = text_enhanced_attn_weight[None, :, :].to(self.device)
             y_train = train_y[None, :].float()
             pred = self.model(
                 x_src=torch.cat([X_train, X_test], dim=1),
                 y_src=y_train.unsqueeze(-1),
                 task=self.mode,
+                text_enhanced_attn_weight=text_enhanced_attn_weight,
             )
 
             return pred.float().squeeze().detach().cpu().float().numpy()
@@ -80,22 +86,23 @@ class TabDPTRegressor(TabDPTEstimator, RegressorMixin):
                     x_src=torch.cat([X_nni, X_eval], dim=1),
                     y_src=y_nni.unsqueeze(-1),
                     task=self.mode,
+                    text_enhanced_attn_weight=text_enhanced_attn_weight,
                 )
 
                 pred_list.append(pred.squeeze(dim=0))
 
             return torch.cat(pred_list).squeeze().detach().cpu().float().numpy()
 
-    def _ensemble_predict(self, X: np.ndarray, n_ensembles: int = 8, context_size: int = 2048, seed: int | None = None):
+    def _ensemble_predict(self, X: np.ndarray, n_ensembles: int = 8, context_size: int = 2048, seed: int | None = None, text_enhanced_attn_weight: np.ndarray | None = None):
         prediction_cumsum = 0
         generator = np.random.SeedSequence(seed)
         for _, inner_seed in tqdm(zip(range(n_ensembles), generator.generate_state(n_ensembles))):
             inner_seed = int(inner_seed)
-            prediction_cumsum += self._predict(X, context_size=context_size, seed=inner_seed)
+            prediction_cumsum += self._predict(X, context_size=context_size, seed=inner_seed, text_enhanced_attn_weight=text_enhanced_attn_weight)
         return prediction_cumsum / n_ensembles
 
-    def predict(self, X: np.ndarray, n_ensembles: int = 8, context_size: int = 2048, seed: int | None = None):
+    def predict(self, X: np.ndarray, n_ensembles: int = 8, context_size: int = 2048, seed: int | None = None, text_enhanced_attn_weight: np.ndarray | None = None):
         if n_ensembles == 1:
-            return self._predict(X, context_size=context_size, seed=seed)
+            return self._predict(X, context_size=context_size, seed=seed, text_enhanced_attn_weight=text_enhanced_attn_weight)
         else:
-            return self._ensemble_predict(X, n_ensembles=n_ensembles, context_size=context_size, seed=seed)
+            return self._ensemble_predict(X, n_ensembles=n_ensembles, context_size=context_size, seed=seed, text_enhanced_attn_weight=text_enhanced_attn_weight)
