@@ -147,9 +147,11 @@ class TransformerEncoderLayer(nn.Module):
         self.k_norm = LayerNorm(self.head_dim)
 
         if text_enhanced:
+            # one alpha for all heads
             # self.alpha = nn.Parameter(torch.zeros(1))
-            # ts_gating_val = torch.sigmoid(self.alpha)
-            self.register_buffer('ts_gating_val', torch.ones(1))
+            # Per-head gating parameter: one alpha per attention head
+            self.alpha = nn.Parameter(torch.zeros(num_heads))
+            # self.register_buffer('ts_gating_val', torch.ones(1))
 
     def forward(self, x, eval_pos, text_enhanced_attn_weight: torch.Tensor | None = None):
         x = x.transpose(0, 1)
@@ -166,15 +168,28 @@ class TransformerEncoderLayer(nn.Module):
             # _, _, attn = _scaled_dot_product_attention_with_attention_scores(q, k, v)
             # attn = attn.transpose(1, 2)
         else:
-            # attn_weight: (B, num_heads, L, eval_pos) — softmaxed attention weights
-            # text_enhanced_attn_weight: (B, L, eval_pos) -> (B, num_heads, L, eval_pos)
+            # N: number of training & test samples 
+            # N_train=eval_pos: number of training samples
+            # B: batch size
+            # attn_weight: (B, num_heads, N, N_train) — softmaxed attention weights
             attn_logit, attn_weight, _ = _scaled_dot_product_attention_with_attention_scores(q, k, v)
+            # text_enhanced_attn_weight: (B, N, N_train) -> (B, num_heads, N, N_train)
+            # same text_enhanced_atten_weight for all heads
             text_enhanced_attn_weight = text_enhanced_attn_weight.unsqueeze(1).repeat(1, self.num_heads, 1, 1)
-            print(attn_weight.shape, text_enhanced_attn_weight.shape)
-            print(attn_weight)
-            print(text_enhanced_attn_weight)
-            print(1 - self.ts_gating_val)
-            attn_weight = attn_weight * self.ts_gating_val + (1 - self.ts_gating_val) * text_enhanced_attn_weight
+            # Compute per-head gating values from learnable parameter: (num_heads,)
+            ts_gating_val = torch.sigmoid(self.alpha)  # Shape: (num_heads,)
+            # Reshape for broadcasting: (1, num_heads, 1, 1) to match (B, num_heads, N, N_train)
+            ts_gating_val = ts_gating_val.view(1, self.num_heads, 1, 1)
+            # Blend attention weights: each head uses its own gating value
+            # Only apply blending to test samples (last N_test rows in second-to-last dimension)
+            # Split into train and test parts
+            attn_weight_train = attn_weight[:, :, :eval_pos, :]  # (B, num_heads, N_train, N_train)
+            attn_weight_test = attn_weight[:, :, eval_pos:, :]  # (B, num_heads, N_test, N_train)
+            # Apply blending only to test part - slice text_enhanced_attn_weight to match test positions
+            text_enhanced_attn_weight_test = text_enhanced_attn_weight[:, :, eval_pos:, :]  # (B, num_heads, N_test, N_train)
+            attn_weight_test = attn_weight_test * ts_gating_val + (1 - ts_gating_val) * text_enhanced_attn_weight_test
+            # Concatenate back
+            attn_weight = torch.cat([attn_weight_train, attn_weight_test], dim=2)  # (B, num_heads, N, N_train)
             attn = attn_weight @ v
             attn = attn.transpose(1, 2)
         attn = self.out_proj(attn.reshape(B, L, self.num_heads * self.head_dim))
