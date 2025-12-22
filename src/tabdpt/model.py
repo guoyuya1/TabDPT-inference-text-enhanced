@@ -151,6 +151,7 @@ class TransformerEncoderLayer(nn.Module):
             # self.alpha = nn.Parameter(torch.zeros(1))
             # Per-head gating parameter: one alpha per attention head
             self.alpha = nn.Parameter(torch.zeros(num_heads))
+            
             # self.register_buffer('ts_gating_val', torch.ones(1))
 
     def forward(self, x, eval_pos, text_enhanced_attn_weight: torch.Tensor | None = None):

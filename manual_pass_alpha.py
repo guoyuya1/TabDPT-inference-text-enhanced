@@ -3,7 +3,6 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-import schedulefree
 
 from tabdpt import TabDPTRegressor
 
@@ -58,7 +57,7 @@ def extract_and_stack_embeddings(df, embedding_cols):
         raise ValueError("No valid embedding columns found")
 
 
-def preprocess_data():
+def preprocess_data_climate():
     # Load climate dataframe
     df = pd.read_csv("../MultimodalForcast/data/climate_ttc/climate_2014_2023_final_with_embeddings_lag_3.csv")
 
@@ -126,51 +125,6 @@ def preprocess_data():
 
     return X_train, X_test, y_train, y_test, train_text, test_text
 
-def get_alpha_parameters(model):
-    """
-    Extract alpha parameters from the model.
-    
-    Args:
-        model: TabDPTModel instance
-    
-    Returns:
-        List of alpha parameters (one per text-enhanced layer)
-    """
-    alpha_params = []
-    for layer in model.transformer_encoder:
-        if hasattr(layer, 'alpha'):
-            alpha_params.append(layer.alpha)
-    return alpha_params
-
-
-def freeze_all_except_alpha(model):
-    # Freeze all parameters first
-    for param in model.parameters():
-        param.requires_grad = False
-
-    # Unfreeze alpha parameters
-    for layer in model.transformer_encoder:
-        if hasattr(layer, 'alpha'):
-            layer.alpha.requires_grad = True
-            print(f"Found alpha parameter: shape {layer.alpha.shape}, requires_grad={layer.alpha.requires_grad}")
-
-def further_split_train_data(X_train, y_train, train_text, idx):
-    # Further split training data: before split_idx = context, after = prediction targets
-    # This allows us to use part of training data as context and rest for loss evaluation
-    train_split_idx = int(len(X_train) * 0.7)  # 70% for context, 30% for prediction targets
-    
-    # Context data (used for in-context learning)
-    X_train_context = X_train[:idx]
-    y_train_context = y_train[:idx]
-    train_text_context = train_text[:idx] 
-    
-    # Prediction target data (used for loss evaluation)
-    X_train_pred = X_train[idx:]
-    y_train_pred = y_train[idx:]
-    train_text_pred = train_text[idx:] 
-
-    return X_train_context, y_train_context, train_text_context, X_train_pred, y_train_pred, train_text_pred
-
 
 def preprocess_data_bitcoin():
     # Load bitcoin dataframe
@@ -205,7 +159,7 @@ def preprocess_data_bitcoin():
     text_embeddings_all = extract_and_stack_embeddings(df, embedding_cols)
 
     # Split based on date (time series split)
-    split_ratio = 0.8
+    split_ratio = 0.95
     split_idx = int(len(df) * split_ratio)
 
     # Alternatively, you can use a specific date:
@@ -241,105 +195,102 @@ def preprocess_data_bitcoin():
 
     return X_train, X_test, y_train, y_test, train_text, test_text
 
+def get_alpha_parameters(model):
+    """Extract alpha parameters from the model."""
+    alpha_params = []
+    for layer in model.transformer_encoder:
+        if hasattr(layer, 'alpha'):
+            alpha_params.append(layer.alpha)
+    return alpha_params
+
 def main():
     # Set device
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-   # Preprocess data and time series split
+    # Preprocess data and time series split
     X_train, X_test, y_train, y_test, train_text, test_text = preprocess_data_bitcoin()
 
-    # Further split training data: before split_idx = context, after = prediction targets
-    X_train_context, y_train_context, train_text_context, X_train_pred, y_train_pred, train_text_pred = further_split_train_data(X_train, y_train, train_text, idx=500)
+    X_test = X_test[:10]
+    y_test = y_test[:10]
+    test_text = test_text[:10]
     
-    # Store original numpy arrays for the loop (they will be used each iteration)
-    # Keep original context arrays as numpy (for regressor.fit())
-    X_train_context_np = X_train_context.copy()  # Keep as numpy for regressor.fit()
-    y_train_context_np = y_train_context.copy()  # Keep as numpy for regressor.fit()
-    train_text_context_np = train_text_context.copy() if train_text_context is not None else None  # Keep as numpy
-    
-    # Keep prediction arrays as numpy (for _predict_autoregressive_fine_tune())
-    X_train_pred_np = X_train_pred.copy()  # Keep as numpy for _predict_autoregressive_fine_tune
-    y_train_pred_np = y_train_pred.copy()  # Keep as numpy for reference
-    train_text_pred_np = train_text_pred.copy() if train_text_pred is not None else None  # Keep as numpy
-
-    
-    # Initialize regressor once and fit it
+    # Initialize regressor with text_enhanced=True
+    print("Initializing TabDPTRegressor...")
     regressor = TabDPTRegressor(text_enhanced=True, device=device)
-    regressor.fit(X_train_context_np, y_train_context_np, text=train_text_context_np)
+    regressor.fit(X_train, y_train, text=train_text)
     
     # Extract model
     dpt_model = regressor.model
-    dpt_model.train() 
-
-    freeze_all_except_alpha(dpt_model)
+    dpt_model.eval()
     
-    # Get only alpha parameters for optimizer (more efficient)
+    # Get alpha parameters
     alpha_params = get_alpha_parameters(dpt_model)
     if len(alpha_params) == 0:
         raise ValueError("No alpha parameters found! Make sure text_enhanced=True when initializing TabDPTRegressor.")
-    print(f"Found {len(alpha_params)} alpha parameter(s) to optimize")
+    print(f"Found {len(alpha_params)} alpha parameter(s)")
     
-    # Instantiate optimizer (borrowed from train.py)
-    optimizer = schedulefree.AdamWScheduleFree(
-        alpha_params,  # Only optimize alpha parameters
-        lr=1e-1,  # Learning rate (adjust as needed)
-        weight_decay=1e-5,  # Weight decay (adjust as needed)
-        warmup_steps=2,
-        betas=(0.9, 0.999),
+    # Prepare data for forward pass
+    X_train_tensor, X_test_tensor, y_train_tensor, text_enhanced_attn_weight = regressor._predict_autoregressive_fine_tune(
+        X_test, text=test_text
     )
-    print(f"Optimizer initialized: {type(optimizer).__name__}")
     
-    # Training loop
-    num_epochs = 20
-    print(f"\nStarting fine-tuning for {num_epochs} epochs...")
+    y_test_tensor = torch.tensor(y_test, dtype=torch.float32).to(device)
     
-    # Set optimizer to train mode (required for AdamWScheduleFree)
-    optimizer.train()
+    # Test gating values from 0 to 1, convert to raw alpha using inverse sigmoid
+    print(f"\nTesting gating values (sigmoid of alpha) from 0.0 to 1.0 in steps of 0.1...")
+    print(f"{'Gating':<12} {'Alpha (raw)':<18} {'MSE Loss':<12} {'RMSE':<12}")
+    print("-" * 60)
     
-    for epoch in range(num_epochs):
-        dpt_model.train()
-        
-        # Prepare data for forward pass - ensure we pass numpy arrays (not tensors)
-        X_train_context_tensor, X_train_pred_tensor, y_train_context_tensor, text_enhanced_attn_weight = regressor._predict_autoregressive_fine_tune(
-            X_train_pred_np, text=train_text_pred_np
-        )
-
-        # Forward pass
-        preds = dpt_model(
-            x_src=torch.cat([X_train_context_tensor, X_train_pred_tensor], dim=1),
-            y_src=y_train_context_tensor.unsqueeze(-1),
-            task="reg",
-            text_enhanced_attn_weight=text_enhanced_attn_weight
-        )
-
-        y_train_pred_tensor = torch.tensor(y_train_pred_np, dtype=torch.float32).to(device)
-        preds = preds.squeeze(-1)
-        
-        # Calculate loss
-        loss = torch.nn.functional.mse_loss(preds, y_train_pred_tensor)
-        
-        # Backward pass
-        optimizer.zero_grad()
-        loss.backward()
-        
-        # # Clip gradients (optional, borrowed from train.py pattern)
-        # torch.nn.utils.clip_grad_norm_(alpha_params, max_norm=1.0)
-        
-        # Optimizer step
-        optimizer.step()
-        
-        # Print alpha values after each epoch
-        alpha_values = []
-        for i, alpha_param in enumerate(alpha_params):
-            alpha_vals = alpha_param.detach().cpu().numpy()
-            alpha_values.append(alpha_vals)
-            # Apply sigmoid to get the actual gating values (since alpha is used with sigmoid in the model)
-            gating_vals = torch.sigmoid(alpha_param).detach().cpu().numpy()
-            print(f"  Alpha {i}: raw={alpha_vals}, gating={gating_vals}")
-        
-        print(f"Epoch {epoch+1}/{num_epochs} - Loss: {loss.item():.4f}")
+    results = []
+    gating_values_to_test = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
     
-    print(f"\nFine-tuning complete! Final MSE loss: {loss.item():.4f}")
+    for gating_val in gating_values_to_test:
+        # Convert gating value to raw alpha using inverse sigmoid (logit)
+        # Handle edge cases: gating=0 -> alpha=-inf, gating=1 -> alpha=+inf
+        if gating_val == 0.0:
+            alpha_raw = -10.0  # Approximate -inf
+        elif gating_val == 1.0:
+            alpha_raw = 10.0   # Approximate +inf
+        else:
+            alpha_raw = np.log(gating_val / (1 - gating_val))  # Inverse sigmoid
+        
+        # Set all alpha parameters to the calculated raw value
+        with torch.no_grad():
+            for alpha_param in alpha_params:
+                alpha_param.fill_(alpha_raw)
+        
+        # Forward pass with current alpha values
+        with torch.no_grad():
+            preds = dpt_model(
+                x_src=torch.cat([X_train_tensor, X_test_tensor], dim=1),
+                y_src=y_train_tensor.unsqueeze(-1),
+                task="reg",
+                text_enhanced_attn_weight=text_enhanced_attn_weight
+            )
+            preds = preds.squeeze(-1)
+            
+            # Calculate MSE loss on test set
+            mse_loss = torch.nn.functional.mse_loss(preds, y_test_tensor)
+            
+            # Calculate RMSE (Root Mean Squared Error)
+            rmse = torch.sqrt(mse_loss)
+        
+        # Store results
+        results.append({
+            'gating': gating_val,
+            'alpha_raw': alpha_raw,
+            'mse_loss': mse_loss.item(),
+            'rmse': rmse.item()
+        })
+        
+        print(f"{gating_val:<12.1f} {alpha_raw:<18.6f} {mse_loss.item():<12.4f} {rmse.item():<12.4f}")
+    
+    # Find best gating value (based on MSE loss)
+    best_result = min(results, key=lambda x: x['mse_loss'])
+    print(f"\nBest gating value: {best_result['gating']:.1f}")
+    print(f"Best alpha (raw): {best_result['alpha_raw']:.6f}")
+    print(f"Best MSE loss: {best_result['mse_loss']:.4f}")
+    print(f"Best RMSE: {best_result['rmse']:.4f}")
 
 
 

@@ -189,8 +189,16 @@ class TabDPTEstimator(BaseEstimator):
             raise ValueError(
                 f"Got train={train_text.shape}, test={text_test.shape}."
             )
-        train_tensor = torch.tensor(train_text, dtype=torch.float32, device=self.device)  # (N_train, L, D)
-        test_tensor = torch.tensor(text_test, dtype=torch.float32, device=self.device)  # (N_test, L, D)
+        # Handle both numpy arrays and tensors properly
+        if isinstance(train_text, torch.Tensor):
+            train_tensor = train_text.detach().clone().to(dtype=torch.float32, device=self.device)
+        else:
+            train_tensor = torch.tensor(train_text, dtype=torch.float32, device=self.device)  # (N_train, L, D)
+        
+        if isinstance(text_test, torch.Tensor):
+            test_tensor = text_test.detach().clone().to(dtype=torch.float32, device=self.device)
+        else:
+            test_tensor = torch.tensor(text_test, dtype=torch.float32, device=self.device)  # (N_test, L, D)
         train_norm = F.normalize(train_tensor, dim=-1)
         test_norm = F.normalize(test_tensor, dim=-1)
         

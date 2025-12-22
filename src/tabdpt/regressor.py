@@ -137,7 +137,7 @@ class TabDPTRegressor(TabDPTEstimator, RegressorMixin):
 
     def _predict_autoregressive_fine_tune(self, X: np.ndarray, text: np.ndarray | None = None):
         
-        train_x, train_y, test_x, train_text, test_text = self._prepare_prediction(X, seed=seed, text=text)
+        train_x, train_y, test_x, train_text, test_text = self._prepare_prediction(X, text=text)
 
         # assume no knn is used for now for ft
         X_train = pad_x(train_x[None, :, :], self.max_features).to(self.device)
@@ -151,8 +151,8 @@ class TabDPTRegressor(TabDPTEstimator, RegressorMixin):
             raise ValueError("Have to provide text for text-enhanced model")
 
         y_train = train_y[None, :].float()
-
-        return x_src, y_src, text_enhanced_attn_weight
+        
+        return X_train, X_test, y_train, text_enhanced_attn_weight
         # pred = self.model(
         #     x_src=torch.cat([X_train, X_test], dim=1),
         #     y_src=y_train.unsqueeze(-1),
