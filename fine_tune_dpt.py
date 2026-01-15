@@ -1,0 +1,611 @@
+"""
+Fine-tune the model's trainable `alpha` (text-attention blending gate).
+
+The goal: only update the gate parameters that control how much the model trusts
+external text attention when predicting *test rows from train context*.
+
+This script is written in a step-by-step style. Each step is explained in code
+and comments so you can port it to a notebook cell-by-cell.
+
+What the gate is in THIS repo
+-----------------------------
+In `tabdpt/model.py`, the transformer stack is set up as:
+- layers 0..(L-2): normal attention
+- last layer: `text_enhanced=True` and has `alpha` (per-head logits)
+
+During the last layer's datapoint attention:
+- train rows attend to train rows (no external attention)
+- test rows attend to train rows, optionally mixing in text similarity attention
+  computed from text embeddings
+
+The gate parameter stored on the last block is a vector of logits with shape (H,),
+one per attention head. The forward pass applies `sigmoid()` to obtain values in
+(0, 1), which are then used as a blending coefficient.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import torch
+from sklearn.metrics import mean_absolute_error, mean_squared_error
+
+try:
+    import schedulefree  # type: ignore
+except Exception:  # noqa: BLE001
+    schedulefree = None
+
+from tabdpt import TabDPTRegressor
+from tabdpt.utils import pad_x
+from eval_fine_tune import _format_metrics, evaluate_rolling
+from load_dataset import load_climate_dataset
+from split_ts import time_split
+
+
+# -----------------------------
+# Step 0) Reproducibility
+# -----------------------------
+torch.manual_seed(0)
+np.random.seed(0)
+
+
+# -----------------------------
+# Step 1) Configuration
+# -----------------------------
+# DATA_PATH = "data/climate_ttc/climate_2014_2023_final_with_embeddings_lag_3.csv"
+# DATE_COLUMN = "date"
+# TARGET_COLUMN = "temp"
+# NUMERIC_FEATURES = ["precip_lag0","precip_lag1","precip_lag2","precip_lag3",
+#                     "humidity_lag0","humidity_lag1","humidity_lag2","humidity_lag3",
+#                     "windspeed_lag0","windspeed_lag1","windspeed_lag2","windspeed_lag3",
+#                     "temp_lag0","temp_lag1","temp_lag2","temp_lag3"]
+
+DATA_PATH = "data/bitcoin/bitcoin_final_with_embeddings_lag_3.csv"
+DATE_COLUMN = "Date"
+NUMERIC_FEATURES = ["Open_lag1", "Open_lag2", "Open_lag3",
+                    "High_lag1", "High_lag2", "High_lag3",
+                    "Low_lag1", "Low_lag2", "Low_lag3",
+                    "Close_lag1", "Close_lag2", "Close_lag3",
+                    "Adj_Close_lag1", "Adj_Close_lag2", "Adj_Close_lag3"]
+TARGET_COLUMN="Adj_Close"
+
+
+# Text lags to use (your regressor averages similarity across the L dimension).
+TEXT_EMBEDDING_LAGS = [1, 2, 3]
+# Either provide an explicit list of embedding columns, or a template for lags.
+# If EMBEDDING_COLUMNS is not None, it takes precedence.
+EMBEDDING_COLUMNS = None
+EMBEDDING_COLUMN_TEMPLATE = "embedding_summary_gpt-5-mini_lag{lag}"
+
+# Use chronological splits to avoid leakage in time series.
+# Fraction-based split: three ratios that must sum to 1.0.
+CONTEXT_RATIO = 0.2
+TUNE_RATIO = 0.6
+EVAL_RATIO = 0.2
+# How many new tune rows to add per batch step.
+TUNE_BATCH_SIZE = 4
+# Optional: cap the training context length during tuning to avoid OOM.
+# If None, use all available context; if an int, keep only the last K rows of
+# [global_context + past_tune] when building each training window.
+MAX_CONTEXT_FOR_TUNE = 1000
+
+# Model loading / inference options.
+# Set MODEL_WEIGHT_PATH to a local .safetensors file to avoid HF downloads.
+MODEL_WEIGHT_PATH = None
+DEVICE = None  # e.g., "cuda:0" or "cpu"
+USE_FLASH = True
+COMPILE_MODEL = True
+# Fine-tuning hyperparameters (we tune only a few numbers: per-head gate logits).
+EPOCHS = 10
+LEARNING_RATE = 1e-4  # kept for backward compatibility; see GATE_LR below
+LOG_EVERY = 5  # epoch-level logging cadence
+STEP_LOG_EVERY = 10  # step-level logging inside each epoch
+
+# Diagnostics: compare eval metrics with/without text attention.
+DEBUG_TEXT_EFFECT = True
+
+# Use a higher LR for the gate to encourage it to move away from ~0.5 if helpful.
+GATE_LR = 5e-1
+
+# Optional: clamp gate *logits* to avoid extreme saturation of sigmoid.
+GATE_LOGIT_CLAMP = 10.0
+
+# Optional: encourage gate probabilities away from 0.5 (toward extremes).
+# Minimizing gate*(1-gate) pushes sigmoids toward 0 or 1. Set to 0.0 to disable.
+GATE_REG_STRENGTH = 0
+
+# Reuse the no-text baseline metrics after tuning to avoid nondeterministic drift.
+FREEZE_NO_TEXT_BASELINE = True
+
+# Run a full eval (no-text + text) after each epoch during fine-tuning.
+EVAL_EACH_EPOCH = True
+
+# Optional context cap during rolling eval (None uses full context).
+MAX_CONTEXT_FOR_EVAL = MAX_CONTEXT_FOR_TUNE
+# Optional context cap during rolling tuning-set eval (None uses full context).
+MAX_CONTEXT_FOR_TUNE_EVAL = MAX_CONTEXT_FOR_TUNE
+
+
+# -----------------------------
+# Step 2) Data loading utilities
+# -----------------------------
+
+def load_tabdpt_regressor(
+    *,
+    device: str | None,
+    model_weight_path: str | None,
+    text_enhanced: bool = True,
+) -> TabDPTRegressor:
+    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    return TabDPTRegressor(
+        device=device,
+        text_enhanced=text_enhanced,
+        model_weight_path=model_weight_path,
+        use_flash=USE_FLASH,
+        compile=COMPILE_MODEL,
+    )
+
+
+def preprocess_features(
+    reg: TabDPTRegressor,
+    X: np.ndarray,
+    *,
+    reduction_mode: str | None,
+    reduction_payload: np.ndarray | None,
+) -> np.ndarray:
+    X_proc = X
+    if reg.missing_indicators:
+        inds = np.isnan(X_proc)[:, reg.has_missing_indicator].astype(float)
+        X_proc = np.hstack((X_proc, inds))
+    X_proc = reg.imputer.transform(X_proc)
+    if reg.scaler:
+        X_proc = reg.scaler.transform(X_proc)
+        if reg.normalizer == "quantile-uniform":
+            X_proc = 2 * X_proc - 1
+
+    if reduction_mode == "pca":
+        if reduction_payload is None:
+            raise ValueError("PCA reduction requested without a payload.")
+        X_proc = X_proc @ reduction_payload
+    elif reduction_mode == "subsample":
+        if reduction_payload is None:
+            raise ValueError("Subsample reduction requested without a payload.")
+        X_proc = X_proc[:, reduction_payload][:, :reg.max_features]
+
+    return X_proc.astype(np.float32)
+
+
+# Evaluation helpers live in eval_fine_tune.py.
+# -----------------------------
+# Step 5) Gate-only parameter selection
+# -----------------------------
+def get_last_layer_gate_param(reg: TabDPTRegressor) -> torch.nn.Parameter:
+    """
+    Return the trainable gate parameter (per-head logits) from the last transformer block.
+
+    Only the last transformer block is `text_enhanced=True` in this repo.
+    """
+    last_block = reg.model.transformer_encoder[-1]
+    if getattr(last_block, "alpha", None) is None:
+        raise RuntimeError("Last block has no alpha gate. Is text_enhanced enabled in the model?")
+    return last_block.alpha
+
+
+def freeze_all_but_last_gate(reg: TabDPTRegressor) -> torch.nn.Parameter:
+    """Freeze all parameters and enable gradients only for the last block's alpha gate."""
+    for p in reg.model.parameters():
+        p.requires_grad_(False)
+    gate = get_last_layer_gate_param(reg)
+    gate.requires_grad_(True)
+    return gate
+
+
+def gate_stats(gate_logits: torch.Tensor) -> str:
+    """Human-readable summary for per-head gate logits and their sigmoid values."""
+    logits = gate_logits.detach().float().cpu().reshape(-1)
+    gate = torch.sigmoid(logits)
+    sample_count = min(8, gate.numel())
+    sample_vals = torch.round(gate[:sample_count], decimals=4).tolist()
+    sample_str = f"{sample_vals}" if gate.numel() <= sample_count else f"{sample_vals}..."
+    return (
+        f"logits(mean/min/max)={logits.mean().item():.4f}/{logits.min().item():.4f}/{logits.max().item():.4f} | "
+        f"sigmoid(mean/min/max)={gate.mean().item():.4f}/{gate.min().item():.4f}/{gate.max().item():.4f} | "
+        f"sigmoid(sample)={sample_str}"
+    )
+
+
+# -----------------------------
+# Step 6) Fine-tuning loop (calls reg.model directly)
+# Rolling window: at step i, train on context + tune[0:i], predict tune[i].
+# -----------------------------
+def fine_tune_external_gate(
+    reg: TabDPTRegressor,
+    *,
+    X_context_proc: np.ndarray,
+    y_context: np.ndarray,
+    text_context: np.ndarray,
+    X_tune: np.ndarray,
+    X_tune_proc: np.ndarray,
+    y_tune: np.ndarray,
+    text_tune: np.ndarray,
+    X_eval: np.ndarray | None = None,
+    X_eval_proc: np.ndarray | None = None,
+    y_eval: np.ndarray | None = None,
+    text_eval: np.ndarray | None = None,
+) -> None:
+    """
+    Fine-tune only the last layer's gate on the tune split.
+
+    Why call the model directly?
+    - `reg.predict()` disables gradients, so we can't optimize with it.
+    - We still re-use everything from `reg.fit()`:
+        - fitted imputers/scalers
+        - text similarity attention via `_compute_attn_weight_pairwise_avg(...)`
+
+    Rolling window (per step inside each epoch):
+    - Train set = context + all prior tune rows
+    - Test row = current tune row
+    - Loss = MSE on that current row (raw space)
+    """
+    # (1) Select tunable params (gate only) and build optimizer.
+    gate = freeze_all_but_last_gate(reg)
+    # Use Schedule-Free AdamW when available; fall back to AdamW otherwise.
+    if schedulefree is None:
+        print("WARNING: `schedulefree` not installed; falling back to torch.optim.AdamW.")
+        optimizer = torch.optim.AdamW([gate], lr=GATE_LR, weight_decay=0.0)
+    else:
+        # optimizer = schedulefree.AdamWScheduleFree(model.parameters(), lr=lr, weight_decay=0.0)
+        optimizer = schedulefree.AdamWScheduleFree([gate], lr=GATE_LR, weight_decay=0.0)
+    print("Tuning last-layer alpha gate:", gate_stats(gate))
+
+    # (3) Rolling-window gradient loop (with base context then growing window)
+    reg.model.eval()
+    if hasattr(optimizer, "train"):
+        optimizer.train()
+
+    num_steps = int(np.ceil(len(y_tune) / TUNE_BATCH_SIZE))
+    for epoch in range(1, EPOCHS + 1):
+        for step_idx in range(num_steps):
+            optimizer.zero_grad()
+
+            start = step_idx * TUNE_BATCH_SIZE
+            end = min(len(y_tune), start + TUNE_BATCH_SIZE)
+
+            # Base context portion inside the tune set + accumulated history.
+            base_cap = MAX_CONTEXT_FOR_TUNE if MAX_CONTEXT_FOR_TUNE is not None else len(y_tune)
+            base_limit = min(base_cap, len(y_tune))
+            past_limit = max(base_limit, start)
+
+            # Train set for this step: global context + tune[0:past_limit]
+            X_train_full = np.concatenate((X_context_proc, X_tune_proc[:past_limit]))
+            y_train_full = np.concatenate((y_context, y_tune[:past_limit]))
+            text_train_full = np.concatenate((text_context, text_tune[:past_limit]), axis=0)
+
+            # Apply optional context cap to avoid long sequences (OOM protection).
+            if MAX_CONTEXT_FOR_TUNE is not None:
+                X_train_step = X_train_full[-MAX_CONTEXT_FOR_TUNE:]
+                y_train_step = y_train_full[-MAX_CONTEXT_FOR_TUNE:]
+                text_train_step = text_train_full[-MAX_CONTEXT_FOR_TUNE:]
+            else:
+                X_train_step = X_train_full
+                y_train_step = y_train_full
+                text_train_step = text_train_full
+
+            # Test batch for this step: tune[start:end]
+            X_test_step = X_tune_proc[start:end]
+            y_target = torch.tensor(y_tune[start:end], dtype=torch.float32, device=reg.device)
+
+            train_text_batch = text_train_step[None, ...]
+            test_text_batch = text_tune[start:end][None, ...]
+            attn_weight_external = reg._compute_attn_weight_pairwise_avg(train_text_batch, test_text_batch)
+
+            X_train_tensor = torch.tensor(X_train_step, dtype=torch.float32, device=reg.device).unsqueeze(0)
+            X_train_tensor = pad_x(X_train_tensor, reg.max_features)
+            X_test_tensor = torch.tensor(X_test_step, dtype=torch.float32, device=reg.device).unsqueeze(0)
+            X_test_tensor = pad_x(X_test_tensor, reg.max_features)
+            y_context_tensor = torch.tensor(y_train_step, dtype=torch.float32, device=reg.device).unsqueeze(0)
+
+            preds = reg.model(
+                x_src=torch.cat([X_train_tensor, X_test_tensor], dim=1),
+                y_src=y_context_tensor.unsqueeze(-1),
+                task="reg",
+                text_enhanced_attn_weight=attn_weight_external,
+            )
+            preds = preds.squeeze(-1).reshape(-1)
+
+            loss = torch.nn.functional.mse_loss(preds, y_target)
+            if GATE_REG_STRENGTH and GATE_REG_STRENGTH > 0:
+                gate_prob = torch.sigmoid(gate)
+                gate_reg = (gate_prob * (1 - gate_prob)).mean()
+                loss = loss + GATE_REG_STRENGTH * gate_reg
+
+            loss.backward()
+            optimizer.step()
+
+            # Optional stability clamp in logit space (NOT in [0,1] space).
+            if GATE_LOGIT_CLAMP is not None:
+                with torch.no_grad():
+                    gate.clamp_(-GATE_LOGIT_CLAMP, GATE_LOGIT_CLAMP)
+
+            if (step_idx + 1) % STEP_LOG_EVERY == 0 or (step_idx == num_steps - 1):
+                preds_np = preds.detach().cpu().numpy()
+                mse = mean_squared_error(y_target.detach().cpu().numpy(), preds_np)
+                rmse = float(np.sqrt(mse))
+                mae = mean_absolute_error(y_target.detach().cpu().numpy(), preds_np)
+                print(
+                    f"Epoch {epoch:02d} Step {step_idx+1:03d}/{num_steps} "
+                    f"(rows {start}–{end-1}) | MAE: {mae:.4f} | RMSE: {rmse:.4f} | {gate_stats(gate)}"
+                )
+        if EVAL_EACH_EPOCH:
+            if X_eval is None or X_eval_proc is None or y_eval is None or text_eval is None:
+                raise ValueError("EVAL_EACH_EPOCH requires X_eval, X_eval_proc, y_eval, and text_eval.")
+            print(f"\n== Eval after epoch {epoch:02d} ==")
+            evaluate_rolling(
+                reg,
+                X_context_proc=X_context_proc,
+                y_context=y_context,
+                text_context=text_context,
+                X_eval_proc=X_tune_proc,
+                y_eval=y_tune,
+                text_eval=text_tune,
+                use_text=False,
+                label="Tune (no text attn)",
+                max_context=MAX_CONTEXT_FOR_TUNE_EVAL,
+            )
+            evaluate_rolling(
+                reg,
+                X_context_proc=X_context_proc,
+                y_context=y_context,
+                text_context=text_context,
+                X_eval_proc=X_tune_proc,
+                y_eval=y_tune,
+                text_eval=text_tune,
+                use_text=True,
+                label="Tune (with text attn)",
+                max_context=MAX_CONTEXT_FOR_TUNE_EVAL,
+            )
+            eval_context_proc = np.concatenate((X_context_proc, X_tune_proc))
+            eval_y_context = np.concatenate((y_context, y_tune))
+            eval_text_context = np.concatenate((text_context, text_tune), axis=0)
+            evaluate_rolling(
+                reg,
+                X_context_proc=eval_context_proc,
+                y_context=eval_y_context,
+                text_context=eval_text_context,
+                X_eval_proc=X_eval_proc,
+                y_eval=y_eval,
+                text_eval=text_eval,
+                use_text=False,
+                label="Eval (no text attn)",
+                max_context=MAX_CONTEXT_FOR_EVAL,
+            )
+            evaluate_rolling(
+                reg,
+                X_context_proc=eval_context_proc,
+                y_context=eval_y_context,
+                text_context=eval_text_context,
+                X_eval_proc=X_eval_proc,
+                y_eval=y_eval,
+                text_eval=text_eval,
+                use_text=True,
+                label="Eval (with text attn)",
+                max_context=MAX_CONTEXT_FOR_EVAL,
+            )
+
+    # (4) Freeze again to avoid surprises if you re-use `reg` later.
+    for p in reg.model.parameters():
+        p.requires_grad_(False)
+
+
+def main() -> None:
+    # Step 1: load the dataset
+    X, y, text = load_climate_dataset(
+        path=DATA_PATH,
+        date_column=DATE_COLUMN,
+        numeric_features=NUMERIC_FEATURES,
+        target_column=TARGET_COLUMN,
+        embedding_lags=TEXT_EMBEDDING_LAGS,
+        embedding_columns=EMBEDDING_COLUMNS,
+        embedding_column_template=EMBEDDING_COLUMN_TEMPLATE,
+    )
+
+    # Step 2: split chronologically
+    (
+        X_context,
+        y_context,
+        text_context,
+        X_tune,
+        y_tune,
+        text_tune,
+        X_eval,
+        y_eval,
+        text_eval,
+    ) = time_split(
+        X,
+        y,
+        text,
+        context_ratio=CONTEXT_RATIO,
+        tune_ratio=TUNE_RATIO,
+        eval_ratio=EVAL_RATIO,
+    )
+    print(f"Split sizes: context={len(y_context)} tune={len(y_tune)} eval={len(y_eval)}")
+
+    # Step 3: initialize regressor + store context set
+    reg = load_tabdpt_regressor(device=DEVICE, model_weight_path=MODEL_WEIGHT_PATH, text_enhanced=True)
+    reg.fit(X_context, y_context, text_context)
+
+    # Feature reduction disabled; features are assumed to fit reg.max_features.
+    reduction_mode = None
+    reduction_payload = None
+    X_context_proc = preprocess_features(
+        reg,
+        X_context,
+        reduction_mode=reduction_mode,
+        reduction_payload=reduction_payload,
+    )
+    X_tune_proc = preprocess_features(
+        reg,
+        X_tune,
+        reduction_mode=reduction_mode,
+        reduction_payload=reduction_payload,
+    )
+    X_eval_proc = preprocess_features(
+        reg,
+        X_eval,
+        reduction_mode=reduction_mode,
+        reduction_payload=reduction_payload,
+    )
+
+    # Step 4: baseline eval
+    print("\n== Baseline (before tuning) ==")
+    baseline_no_text_tune = evaluate_rolling(
+        reg,
+        X_context_proc=X_context_proc,
+        y_context=y_context,
+        text_context=text_context,
+        X_eval_proc=X_tune_proc,
+        y_eval=y_tune,
+        text_eval=text_tune,
+        use_text=False,
+        label="Tune (no text attn)",
+        max_context=MAX_CONTEXT_FOR_TUNE_EVAL,
+    )
+    baseline_text_tune = evaluate_rolling(
+        reg,
+        X_context_proc=X_context_proc,
+        y_context=y_context,
+        text_context=text_context,
+        X_eval_proc=X_tune_proc,
+        y_eval=y_tune,
+        text_eval=text_tune,
+        use_text=True,
+        label="Tune (with text attn)",
+        max_context=MAX_CONTEXT_FOR_TUNE_EVAL,
+    )
+    eval_context_proc = np.concatenate((X_context_proc, X_tune_proc))
+    eval_y_context = np.concatenate((y_context, y_tune))
+    eval_text_context = np.concatenate((text_context, text_tune), axis=0)
+    baseline_no_text_eval = evaluate_rolling(
+        reg,
+        X_context_proc=eval_context_proc,
+        y_context=eval_y_context,
+        text_context=eval_text_context,
+        X_eval_proc=X_eval_proc,
+        y_eval=y_eval,
+        text_eval=text_eval,
+        use_text=False,
+        label="Eval (no text attn)",
+        max_context=MAX_CONTEXT_FOR_EVAL,
+    )
+    baseline_text_eval = evaluate_rolling(
+        reg,
+        X_context_proc=eval_context_proc,
+        y_context=eval_y_context,
+        text_context=eval_text_context,
+        X_eval_proc=X_eval_proc,
+        y_eval=y_eval,
+        text_eval=text_eval,
+        use_text=True,
+        label="Eval (with text attn)",
+        max_context=MAX_CONTEXT_FOR_EVAL,
+    )
+    if DEBUG_TEXT_EFFECT:
+        delta_mae = baseline_text_eval[0] - baseline_no_text_eval[0]
+        delta_rmse = baseline_text_eval[1] - baseline_no_text_eval[1]
+        delta_mape = baseline_text_eval[2] - baseline_no_text_eval[2]
+        print(
+            f"Eval text effect | ΔMAE={delta_mae:.6f} | "
+            f"ΔRMSE={delta_rmse:.6f} | ΔMAPE={delta_mape:.6f}%"
+        )
+    print("Initial gate:", gate_stats(get_last_layer_gate_param(reg)))
+
+    # Step 5: fine-tune gate on tune split
+    print("\n== Fine-tuning alpha gate ==")
+    fine_tune_external_gate(
+        reg,
+        X_context_proc=X_context_proc,
+        y_context=y_context,
+        text_context=text_context,
+        X_tune=X_tune,
+        X_tune_proc=X_tune_proc,
+        y_tune=y_tune,
+        text_tune=text_tune,
+        X_eval=X_eval,
+        X_eval_proc=X_eval_proc,
+        y_eval=y_eval,
+        text_eval=text_eval,
+    )
+
+    # Step 6: eval after tuning
+    print("\n== After tuning ==")
+    if FREEZE_NO_TEXT_BASELINE:
+        _format_metrics("Tune (no text attn)", *baseline_no_text_tune)
+        _format_metrics("Eval (no text attn)", *baseline_no_text_eval)
+        tuned_no_text_eval = baseline_no_text_eval
+    else:
+        evaluate_rolling(
+            reg,
+            X_context_proc=X_context_proc,
+            y_context=y_context,
+            text_context=text_context,
+            X_eval_proc=X_tune_proc,
+            y_eval=y_tune,
+            text_eval=text_tune,
+            use_text=False,
+            label="Tune (no text attn)",
+            max_context=MAX_CONTEXT_FOR_TUNE_EVAL,
+        )
+        tuned_no_text_eval = evaluate_rolling(
+            reg,
+            X_context_proc=eval_context_proc,
+            y_context=eval_y_context,
+            text_context=eval_text_context,
+            X_eval_proc=X_eval_proc,
+            y_eval=y_eval,
+            text_eval=text_eval,
+            use_text=False,
+            label="Eval (no text attn)",
+            max_context=MAX_CONTEXT_FOR_EVAL,
+        )
+    evaluate_rolling(
+        reg,
+        X_context_proc=X_context_proc,
+        y_context=y_context,
+        text_context=text_context,
+        X_eval_proc=X_tune_proc,
+        y_eval=y_tune,
+        text_eval=text_tune,
+        use_text=True,
+        label="Tune (with text attn)",
+        max_context=MAX_CONTEXT_FOR_TUNE_EVAL,
+    )
+    tuned_text_eval = evaluate_rolling(
+        reg,
+        X_context_proc=eval_context_proc,
+        y_context=eval_y_context,
+        text_context=eval_text_context,
+        X_eval_proc=X_eval_proc,
+        y_eval=y_eval,
+        text_eval=text_eval,
+        use_text=True,
+        label="Eval (with text attn)",
+        max_context=MAX_CONTEXT_FOR_EVAL,
+    )
+    if DEBUG_TEXT_EFFECT:
+        delta_mae = tuned_text_eval[0] - tuned_no_text_eval[0]
+        delta_rmse = tuned_text_eval[1] - tuned_no_text_eval[1]
+        delta_mape = tuned_text_eval[2] - tuned_no_text_eval[2]
+        print(
+            f"Eval text effect | ΔMAE={delta_mae:.6f} | "
+            f"ΔRMSE={delta_rmse:.6f} | ΔMAPE={delta_mape:.6f}%"
+        )
+    print("Tuned gate:", gate_stats(get_last_layer_gate_param(reg)))
+
+    print("\n== Baseline (before tuning) ==")
+    _format_metrics("Tune (no text attn)", *baseline_no_text_tune)
+    _format_metrics("Eval (no text attn)", *baseline_no_text_eval)
+    _format_metrics("Tune (with text attn)", *baseline_text_tune)
+    _format_metrics("Eval (with text attn)", *baseline_text_eval)
+
+
+if __name__ == "__main__":
+    main()
