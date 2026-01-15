@@ -94,7 +94,7 @@ class TabDPTModel(nn.Module):
         return pred
 
     @classmethod
-    def load(cls, model_state, config, use_flash, clip_sigma: float = 4., text_enhanced: bool = False):
+    def load(cls, model_state, config, use_flash, clip_sigma: float = 4., text_enhanced: bool = False, num_text_lags: int = 3):
         assert config.model.max_num_classes > 2
         model = TabDPTModel(
             dropout=config.training.dropout,
@@ -121,6 +121,7 @@ class TabDPTModel(nn.Module):
                 num_heads=last_layer.num_heads,
                 ff_dim=last_layer.ff[0].out_features,
                 text_enhanced=True,
+                num_text_lags=num_text_lags
             )
             # Copy pretrained weights to the new layer
             model.transformer_encoder[last_idx].load_state_dict(last_layer.state_dict(), strict=False)
