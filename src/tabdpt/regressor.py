@@ -64,8 +64,12 @@ class TabDPTRegressor(TabDPTEstimator, RegressorMixin):
             text_enhanced_attn_weight = None
             if self.text_enhanced and train_text is not None and test_text is not None:
                 # Convert to numpy arrays for the function (it expects numpy arrays)
-                text_enhanced_attn_weight = self._compute_attn_weight_pairwise_avg(train_text, test_text) # (N_train, N_test)
-                text_enhanced_attn_weight = text_enhanced_attn_weight[None, :, :].to(self.device) # (1, N_train, N_test)
+                # text_enhanced_attn_weight = self._compute_attn_weight_pairwise_avg(train_text, test_text) # (N_train, N_test)        
+                # text_enhanced_attn_weight = text_enhanced_attn_weight[None, :, :].to(self.device) # (1, N_train, N_test)
+
+                # mlp to replace average pooling
+                text_enhanced_attn_weight = self._compute_pairwise_text_similarity(train_text, test_text) # (L, N_test, N_train)
+                text_enhanced_attn_weight = text_enhanced_attn_weight[None, :, :].to(self.device) # (1, L, N_test, N_train)
 
             y_train = train_y[None, :].float()
             pred = self.model(
@@ -108,7 +112,9 @@ class TabDPTRegressor(TabDPTEstimator, RegressorMixin):
                 # calculate text enhanced attention weight (only if text_enhanced is True)
                 text_enhanced_attn_weight = None
                 if self.text_enhanced and train_text_nni is not None and test_text_eval is not None:
-                    text_enhanced_attn_weight = self._compute_attn_weight_pairwise_avg(train_text_nni, test_text_eval) # (N_train', N_test')
+                    # text_enhanced_attn_weight = self._compute_attn_weight_pairwise_avg(train_text_nni, test_text_eval) # (N_train', N_test')
+                    text_enhanced_attn_weight = self._compute_pairwise_text_similarity(train_text_nni, test_text_eval)
+
 
                 pred = self.model(
                     x_src=torch.cat([X_nni, X_eval], dim=1),
@@ -145,8 +151,11 @@ class TabDPTRegressor(TabDPTEstimator, RegressorMixin):
         
         if self.text_enhanced and train_text is not None and test_text is not None:
             # Convert to numpy arrays for the function (it expects numpy arrays)
-            text_enhanced_attn_weight = self._compute_attn_weight_pairwise_avg(train_text, test_text) # (N_train, N_test)
-            text_enhanced_attn_weight = text_enhanced_attn_weight[None, :, :].to(self.device) # (1, N_train, N_test)
+            # text_enhanced_attn_weight = self._compute_attn_weight_pairwise_avg(train_text, test_text) # (N_train, N_test)
+            # text_enhanced_attn_weight = text_enhanced_attn_weight[None, :, :].to(self.device) # (1, N_train, N_test)
+
+            text_enhanced_attn_weight = self._compute_pairwise_text_similarity(train_text, test_text)
+            text_enhanced_attn_weight = text_enhanced_attn_weight[None, :, :].to(self.device)
         else:
             raise ValueError("Have to provide text for text-enhanced model")
 

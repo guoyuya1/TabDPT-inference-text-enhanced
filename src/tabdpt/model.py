@@ -131,7 +131,7 @@ class TabDPTModel(nn.Module):
 
 
 class TransformerEncoderLayer(nn.Module):
-    def __init__(self, embed_dim, num_heads, ff_dim, text_enhanced=False):
+    def __init__(self, embed_dim, num_heads, ff_dim, text_enhanced=False, num_text_lags=3):
         super().__init__()
         self.embed_dim = embed_dim
         self.head_dim = embed_dim // num_heads
@@ -147,12 +147,18 @@ class TransformerEncoderLayer(nn.Module):
         self.k_norm = LayerNorm(self.head_dim)
 
         if text_enhanced:
-            # one alpha for all heads
-            # self.alpha = nn.Parameter(torch.zeros(1))
+            self.num_text_lags = num_text_lags
+            # one ffn for each head
+            self.text_ff_per_head = nn.ModuleList([
+                nn.Sequential(
+                    Linear(num_text_lags, num_text_lags), 
+                    GELU(), 
+                    Linear(num_text_lags, 1)
+                )
+                for _ in range(num_heads)
+            ])
             # Per-head gating parameter: one alpha per attention head
             self.alpha = nn.Parameter(torch.zeros(num_heads))
-            
-            # self.register_buffer('ts_gating_val', torch.ones(1))
 
     def forward(self, x, eval_pos, text_enhanced_attn_weight: torch.Tensor | None = None):
         x = x.transpose(0, 1)
@@ -168,6 +174,7 @@ class TransformerEncoderLayer(nn.Module):
             attn = F.scaled_dot_product_attention(q, k, v).transpose(1, 2)
             # _, _, attn = _scaled_dot_product_attention_with_attention_scores(q, k, v)
             # attn = attn.transpose(1, 2)
+
         else:
             # N: number of training & test samples 
             # N_train=eval_pos: number of training samples
@@ -176,7 +183,29 @@ class TransformerEncoderLayer(nn.Module):
             attn_logit, attn_weight, _ = _scaled_dot_product_attention_with_attention_scores(q, k, v)
             # text_enhanced_attn_weight: (B, N, N_train) -> (B, num_heads, N, N_train)
             # same text_enhanced_atten_weight for all heads
-            text_enhanced_attn_weight = text_enhanced_attn_weight.unsqueeze(1).repeat(1, self.num_heads, 1, 1)
+
+            # Process text_enhanced_attn_weight through per-head MLPs along dimension num_text_lags
+            # Input: (B, num_text_lags, N_test, N_train) where num_text_lags is the number of text lag features
+            # Output: (B, num_heads, N_test, N_train) - each head processes independently
+            B_text, num_text_lags, N_test, N_train = text_enhanced_attn_weight.shape
+            assert B_text == B, f"Batch size mismatch: B={B} from input x, but B_text={B_text} from text_enhanced_attn_weight"
+            
+            # Process each head independently through its own MLP along dimension num_text_lags
+            processed_per_head = []
+            for head_idx in range(self.num_heads):
+                # Reshape to (B * N_test * N_train, num_text_lags) to process along num_text_lags dimension
+                # (B, num_text_lags, N_test, N_train) -> permute(0,2,3,1) -> (B, N_test, N_train, num_text_lags) -> reshape -> (B * N_test * N_train, num_text_lags)
+                text_flat = text_enhanced_attn_weight.permute(0, 2, 3, 1).reshape(-1, num_text_lags)  # (B * N_test * N_train, num_text_lags)
+                # Apply this head's MLP: (B * N_test * N_train, num_text_lags) -> (B * N_test * N_train, 1)
+                text_processed = self.text_ff_per_head[head_idx](text_flat).squeeze(-1)  # (B * N_test * N_train,)
+                # Reshape back to (B, N_test, N_train)
+                text_processed = text_processed.reshape(B, N_test, N_train)
+                processed_per_head.append(text_processed)
+            
+            # Stack all heads: (B, num_heads, N_test, N_train)
+            text_enhanced_attn_weight_test = torch.stack(processed_per_head, dim=1)
+            # Apply softmax along N_train dimension for each (B, num_heads, N_test_row)
+            text_enhanced_attn_weight_test = F.softmax(text_enhanced_attn_weight_test, dim=-1)  # (B, num_heads, N_test, N_train)
             # Compute per-head gating values from learnable parameter: (num_heads,)
             ts_gating_val = torch.sigmoid(self.alpha)  # Shape: (num_heads,)
             # Reshape for broadcasting: (1, num_heads, 1, 1) to match (B, num_heads, N, N_train)
@@ -186,13 +215,12 @@ class TransformerEncoderLayer(nn.Module):
             # Split into train and test parts
             attn_weight_train = attn_weight[:, :, :eval_pos, :]  # (B, num_heads, N_train, N_train)
             attn_weight_test = attn_weight[:, :, eval_pos:, :]  # (B, num_heads, N_test, N_train)
-            # Apply blending only to test part - slice text_enhanced_attn_weight to match test positions
-            text_enhanced_attn_weight_test = text_enhanced_attn_weight[:, :, eval_pos:, :]  # (B, num_heads, N_test, N_train)
             attn_weight_test = attn_weight_test * ts_gating_val + (1 - ts_gating_val) * text_enhanced_attn_weight_test
             # Concatenate back
             attn_weight = torch.cat([attn_weight_train, attn_weight_test], dim=2)  # (B, num_heads, N, N_train)
             attn = attn_weight @ v
             attn = attn.transpose(1, 2)
+        # L is the total sequence length (train + test), which matches the first dimension of attn after transpose
         attn = self.out_proj(attn.reshape(B, L, self.num_heads * self.head_dim))
         x = x + attn
         x = x + self.ff(self.ff_norm(x))
