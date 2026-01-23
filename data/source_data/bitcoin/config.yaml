@@ -1,0 +1,15 @@
+source_csv_path: bitcoin_price_news.csv
+output_csv_path: ../../processed_data/bitcoin/bitcoin_final_with_embeddings_lag_5.csv
+
+text_columns:
+  - summary_gpt-5-mini
+
+target_columns:
+  - Close
+
+date_column: Date
+model_name: Qwen/Qwen3-Embedding-4B # Qwen/Qwen3-Embedding-0.6B
+lag_days: 5
+batch_size: 8
+max_length: 1024
+na_text: n/a

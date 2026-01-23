@@ -1,346 +1,244 @@
-import ast
+"""
+Autoregressive gate fine-tuning using the same dataset config + rolling eval pipeline.
+
+This keeps the autoregressive training style but aligns data loading, splits,
+and evaluation with fine_tune_dpt.py/eval_fine_tune.py.
+"""
+
+from __future__ import annotations
+
+import argparse
+
 import numpy as np
-import pandas as pd
 import torch
-import torch.nn as nn
-import schedulefree
 
-from tabdpt import TabDPTRegressor
+try:
+    import schedulefree  # type: ignore
+except Exception:  # noqa: BLE001
+    schedulefree = None
+
+from eval_fine_tune import _format_metrics, evaluate_rolling
+from fine_tune_dpt import (
+    freeze_all_but_last_gate,
+    gate_stats,
+    load_dataset_config,
+    load_tabdpt_regressor,
+    preprocess_features,
+)
+from load_dataset import load_climate_dataset
+from split_ts import time_split
 
 
-def extract_and_stack_embeddings(df, embedding_cols):
-    """
-    Extract embedding columns from dataframe and stack them as a numpy matrix.
-    
-    Args:
-        df: DataFrame with embedding columns stored as string representations of lists
-        embedding_cols: List of column names to extract (e.g., ['embedding_text_lag1', 'embedding_text_lag2', 'embedding_text_lag3'])
-    
-    Returns:
-        numpy array of shape (N, L, D) where:
-        - N = number of rows
-        - L = number of embedding columns (lags)
-        - D = embedding dimension
-    """
-    embeddings_list = []
-    
-    for col in embedding_cols:
-        if col not in df.columns:
-            print(f"Warning: Column '{col}' not found. Skipping.")
-            continue
-        
-        # Parse string representation of list to actual list
-        col_embeddings = []
-        for idx, val in enumerate(df[col]):
-            try:
-                # Try to parse as literal string representation
-                if isinstance(val, str):
-                    embedding = ast.literal_eval(val)
-                else:
-                    embedding = val
-                col_embeddings.append(np.array(embedding))
-            except (ValueError, SyntaxError) as e:
-                print(f"Warning: Could not parse embedding at row {idx} in column {col}: {e}")
-                # Use zeros as fallback (you may want to handle this differently)
-                if len(col_embeddings) > 0:
-                    col_embeddings.append(np.zeros_like(col_embeddings[0]))
-                else:
-                    # If we don't know the dimension yet, skip this row
-                    continue
-        
-        embeddings_list.append(np.array(col_embeddings))
-    
-    # Stack along the lag dimension: (N, L, D)
-    if embeddings_list:
-        stacked = np.stack(embeddings_list, axis=1)  # (N, L, D)
-        return stacked
+torch.manual_seed(0)
+np.random.seed(0)
+
+DATASET_CONFIG_PATH = "configs/bitcoin.yaml"
+DEFAULT_DATASET = None
+
+MAX_ROWS = 1000
+CONTEXT_RATIO = 0.2
+TUNE_RATIO = 0.6
+EVAL_RATIO = 0.2
+
+EPOCHS = 50
+GATE_LR = 1e-1
+GATE_LOGIT_CLAMP = 10.0
+LOG_EVERY = 5
+
+MODEL_WEIGHT_PATH = None
+DEVICE = None
+
+MAX_CONTEXT_FOR_EVAL = 1000
+
+
+def fine_tune_gate_autoregressive(
+    reg,
+    *,
+    X_tune: np.ndarray,
+    y_tune: np.ndarray,
+    text_tune: np.ndarray,
+) -> None:
+    gate = freeze_all_but_last_gate(reg)
+    if schedulefree is None:
+        print("WARNING: `schedulefree` not installed; falling back to torch.optim.AdamW.")
+        optimizer = torch.optim.AdamW([gate], lr=GATE_LR, weight_decay=0.0)
     else:
-        raise ValueError("No valid embedding columns found")
+        optimizer = schedulefree.AdamWScheduleFree([gate], lr=GATE_LR, weight_decay=0.0)
+    if hasattr(optimizer, "train"):
+        optimizer.train()
 
-
-def preprocess_data():
-    # Load climate dataframe
-    df = pd.read_csv("../MultimodalForcast/data/climate_ttc/climate_2014_2023_final_with_embeddings_lag_3.csv")
-
-    # Sort by date if available
-    if "date" in df.columns:
-        df = df.sort_values("date").reset_index(drop=True)
-
-    # Configuration: Select which columns to use as features
-    feature_columns = ["precip_lag1", "precip_lag2", "precip_lag3",
-                    "humidity_lag1", "humidity_lag2", "humidity_lag3",
-                    "windspeed_lag1", "windspeed_lag2", "windspeed_lag3",
-                    "temp_lag1", "temp_lag2", "temp_lag3"]
-
-
-    # Validate and extract features
-    missing_cols = [col for col in feature_columns if col not in df.columns]
-    if missing_cols:
-        print(f"Warning: The following columns are not found in the dataframe: {missing_cols}")
-        feature_columns = [col for col in feature_columns if col in df.columns]
-
-    X = df[feature_columns].values
-    # target column
-    y = df["temp"].values
-
-    print(f"Using {len(feature_columns)} feature columns: {feature_columns}")
-
-    # Extract text embeddings for all data first
-    embedding_cols = ['embedding_text_lag1', 'embedding_text_lag2', 'embedding_text_lag3']
-    text_embeddings_all = extract_and_stack_embeddings(df, embedding_cols)
-
-    # Split based on date (time series split)
-    split_ratio = 0.8
-    split_idx = int(len(df) * split_ratio)
-
-    # Alternatively, you can use a specific date:
-    # split_date = "2022-12-05"
-    # if "date" in df.columns:
-    #     df['date'] = pd.to_datetime(df['date'])
-    #     split_idx = len(df[df['date'] < pd.to_datetime(split_date)])
-
-    idx_train = np.arange(split_idx)
-    idx_test = np.arange(split_idx, len(df))
-
-    # Split data using date-based indices
-    X_train = X[idx_train]
-    X_test = X[idx_test]
-    y_train = y[idx_train]
-    y_test = y[idx_test]
-
-    # Split text embeddings using the same indices
-    train_text = text_embeddings_all[idx_train]
-    test_text = text_embeddings_all[idx_test]
-
-    # Print split information
-    if "date" in df.columns:
-        print(f"Train date range: {df.iloc[idx_train[0]]['date']} to {df.iloc[idx_train[-1]]['date']}")
-        print(f"Test date range: {df.iloc[idx_test[0]]['date']} to {df.iloc[idx_test[-1]]['date']}")
-
-    print(f"X_train shape: {X_train.shape}")
-    print(f"X_test shape: {X_test.shape}")
-    print(f"y_train shape: {y_train.shape}")
-    print(f"y_test shape: {y_test.shape}")
-    print(f"train_text shape: {train_text.shape}")
-    print(f"test_text shape: {test_text.shape}")
-
-    return X_train, X_test, y_train, y_test, train_text, test_text
-
-def get_alpha_parameters(model):
-    """
-    Extract alpha parameters from the model.
-    
-    Args:
-        model: TabDPTModel instance
-    
-    Returns:
-        List of alpha parameters (one per text-enhanced layer)
-    """
-    alpha_params = []
-    for layer in model.transformer_encoder:
-        if hasattr(layer, 'alpha'):
-            alpha_params.append(layer.alpha)
-    return alpha_params
-
-
-def freeze_all_except_alpha(model):
-    # Freeze all parameters first
-    for param in model.parameters():
-        param.requires_grad = False
-
-    # Unfreeze alpha parameters
-    for layer in model.transformer_encoder:
-        if hasattr(layer, 'alpha'):
-            layer.alpha.requires_grad = True
-            print(f"Found alpha parameter: shape {layer.alpha.shape}, requires_grad={layer.alpha.requires_grad}")
-
-def further_split_train_data(X_train, y_train, train_text, idx):
-    # Further split training data: before split_idx = context, after = prediction targets
-    # This allows us to use part of training data as context and rest for loss evaluation
-    train_split_idx = int(len(X_train) * 0.7)  # 70% for context, 30% for prediction targets
-    
-    # Context data (used for in-context learning)
-    X_train_context = X_train[:idx]
-    y_train_context = y_train[:idx]
-    train_text_context = train_text[:idx] 
-    
-    # Prediction target data (used for loss evaluation)
-    X_train_pred = X_train[idx:]
-    y_train_pred = y_train[idx:]
-    train_text_pred = train_text[idx:] 
-
-    return X_train_context, y_train_context, train_text_context, X_train_pred, y_train_pred, train_text_pred
-
-
-def preprocess_data_bitcoin():
-    # Load bitcoin dataframe
-    df = pd.read_csv("../MultimodalForcast/data/bitcoin/bitcoin_final_with_embeddings_lag_3.csv")
-
-    # Sort by date if available
-    if "date" in df.columns:
-        df = df.sort_values("date").reset_index(drop=True)
-
-    # Configuration: Select which columns to use as features
-    feature_columns = ["Open_lag1", "Open_lag2", "Open_lag3",
-                    "High_lag1", "High_lag2", "High_lag3",
-                    "Low_lag1", "Low_lag2", "Low_lag3",
-                    "Close_lag1", "Close_lag2", "Close_lag3",
-                    "Adj_Close_lag1", "Adj_Close_lag2", "Adj_Close_lag3"]
-
-    # Validate and extract features
-    missing_cols = [col for col in feature_columns if col not in df.columns]
-    if missing_cols:
-        print(f"Warning: The following columns are not found in the dataframe: {missing_cols}")
-        feature_columns = [col for col in feature_columns if col in df.columns]
-
-    X = df[feature_columns].values
-    # target column
-    y = df["Adj_Close"].values
-
-    print(f"Using {len(feature_columns)} feature columns: {feature_columns}")
-
-    # Extract text embeddings for all data first
-    embedding_cols = ['embedding_summary_gpt-5-mini_lag1', 'embedding_summary_gpt-5-mini_lag2', 'embedding_summary_gpt-5-mini_lag3']
-
-    text_embeddings_all = extract_and_stack_embeddings(df, embedding_cols)
-
-    # Split based on date (time series split)
-    split_ratio = 0.8
-    split_idx = int(len(df) * split_ratio)
-
-    # Alternatively, you can use a specific date:
-    # split_date = "2022-12-05"
-    # if "date" in df.columns:
-    #     df['date'] = pd.to_datetime(df['date'])
-    #     split_idx = len(df[df['date'] < pd.to_datetime(split_date)])
-
-    idx_train = np.arange(split_idx)
-    idx_test = np.arange(split_idx, len(df))
-
-    # Split data using date-based indices
-    X_train = X[idx_train]
-    X_test = X[idx_test]
-    y_train = y[idx_train]
-    y_test = y[idx_test]
-
-    # Split text embeddings using the same indices
-    train_text = text_embeddings_all[idx_train]
-    test_text = text_embeddings_all[idx_test]
-
-    # Print split information
-    if "date" in df.columns:
-        print(f"Train date range: {df.iloc[idx_train[0]]['date']} to {df.iloc[idx_train[-1]]['date']}")
-        print(f"Test date range: {df.iloc[idx_test[0]]['date']} to {df.iloc[idx_test[-1]]['date']}")
-
-    print(f"X_train shape: {X_train.shape}")
-    print(f"X_test shape: {X_test.shape}")
-    print(f"y_train shape: {y_train.shape}")
-    print(f"y_test shape: {y_test.shape}")
-    print(f"train_text shape: {train_text.shape}")
-    print(f"test_text shape: {test_text.shape}")
-
-    return X_train, X_test, y_train, y_test, train_text, test_text
-
-def main():
-    # Set device
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-   # Preprocess data and time series split
-    X_train, X_test, y_train, y_test, train_text, test_text = preprocess_data_bitcoin()
-
-    # Further split training data: before split_idx = context, after = prediction targets
-    X_train_context, y_train_context, train_text_context, X_train_pred, y_train_pred, train_text_pred = further_split_train_data(X_train, y_train, train_text, idx=500)
-    
-    # Store original numpy arrays for the loop (they will be used each iteration)
-    # Keep original context arrays as numpy (for regressor.fit())
-    X_train_context_np = X_train_context.copy()  # Keep as numpy for regressor.fit()
-    y_train_context_np = y_train_context.copy()  # Keep as numpy for regressor.fit()
-    train_text_context_np = train_text_context.copy() if train_text_context is not None else None  # Keep as numpy
-    
-    # Keep prediction arrays as numpy (for _predict_autoregressive_fine_tune())
-    X_train_pred_np = X_train_pred.copy()  # Keep as numpy for _predict_autoregressive_fine_tune
-    y_train_pred_np = y_train_pred.copy()  # Keep as numpy for reference
-    train_text_pred_np = train_text_pred.copy() if train_text_pred is not None else None  # Keep as numpy
-
-    
-    # Initialize regressor once and fit it
-    regressor = TabDPTRegressor(text_enhanced=True, device=device)
-    regressor.fit(X_train_context_np, y_train_context_np, text=train_text_context_np)
-    
-    # Extract model
-    dpt_model = regressor.model
-    dpt_model.train() 
-
-    freeze_all_except_alpha(dpt_model)
-    
-    # Get only alpha parameters for optimizer (more efficient)
-    alpha_params = get_alpha_parameters(dpt_model)
-    if len(alpha_params) == 0:
-        raise ValueError("No alpha parameters found! Make sure text_enhanced=True when initializing TabDPTRegressor.")
-    print(f"Found {len(alpha_params)} alpha parameter(s) to optimize")
-    
-    # Instantiate optimizer (borrowed from train.py)
-    optimizer = schedulefree.AdamWScheduleFree(
-        alpha_params,  # Only optimize alpha parameters
-        lr=1e-1,  # Learning rate (adjust as needed)
-        weight_decay=1e-5,  # Weight decay (adjust as needed)
-        warmup_steps=2,
-        betas=(0.9, 0.999),
-    )
-    print(f"Optimizer initialized: {type(optimizer).__name__}")
-    
-    # Training loop
-    num_epochs = 20
-    print(f"\nStarting fine-tuning for {num_epochs} epochs...")
-    
-    # Set optimizer to train mode (required for AdamWScheduleFree)
-    optimizer.train()
-    
-    for epoch in range(num_epochs):
-        dpt_model.train()
-        
-        # Prepare data for forward pass - ensure we pass numpy arrays (not tensors)
-        X_train_context_tensor, X_train_pred_tensor, y_train_context_tensor, text_enhanced_attn_weight = regressor._predict_autoregressive_fine_tune(
-            X_train_pred_np, text=train_text_pred_np
+    for epoch in range(1, EPOCHS + 1):
+        reg.model.train()
+        X_train_tensor, X_test_tensor, y_train_tensor, text_attn_weight = reg._predict_autoregressive_fine_tune(
+            X_tune, text=text_tune
         )
-
-        # Forward pass
-        preds = dpt_model(
-            x_src=torch.cat([X_train_context_tensor, X_train_pred_tensor], dim=1),
-            y_src=y_train_context_tensor.unsqueeze(-1),
+        y_target = torch.tensor(y_tune, dtype=torch.float32, device=reg.device)
+        preds = reg.model(
+            x_src=torch.cat([X_train_tensor, X_test_tensor], dim=1),
+            y_src=y_train_tensor.unsqueeze(-1),
             task="reg",
-            text_enhanced_attn_weight=text_enhanced_attn_weight
+            text_enhanced_attn_weight=text_attn_weight,
         )
-
-        y_train_pred_tensor = torch.tensor(y_train_pred_np, dtype=torch.float32).to(device)
         preds = preds.squeeze(-1)
-        
-        # Calculate loss
-        loss = torch.nn.functional.mse_loss(preds, y_train_pred_tensor)
-        
-        # Backward pass
+        loss = torch.nn.functional.mse_loss(preds, y_target)
+
         optimizer.zero_grad()
         loss.backward()
-        
-        # # Clip gradients (optional, borrowed from train.py pattern)
-        # torch.nn.utils.clip_grad_norm_(alpha_params, max_norm=1.0)
-        
-        # Optimizer step
         optimizer.step()
-        
-        # Print alpha values after each epoch
-        alpha_values = []
-        for i, alpha_param in enumerate(alpha_params):
-            alpha_vals = alpha_param.detach().cpu().numpy()
-            alpha_values.append(alpha_vals)
-            # Apply sigmoid to get the actual gating values (since alpha is used with sigmoid in the model)
-            gating_vals = torch.sigmoid(alpha_param).detach().cpu().numpy()
-            print(f"  Alpha {i}: raw={alpha_vals}, gating={gating_vals}")
-        
-        print(f"Epoch {epoch+1}/{num_epochs} - Loss: {loss.item():.4f}")
-    
-    print(f"\nFine-tuning complete! Final MSE loss: {loss.item():.4f}")
 
+        if GATE_LOGIT_CLAMP is not None:
+            with torch.no_grad():
+                gate.clamp_(-GATE_LOGIT_CLAMP, GATE_LOGIT_CLAMP)
+
+        if epoch % LOG_EVERY == 0 or epoch == 1 or epoch == EPOCHS:
+            print(f"Epoch {epoch:02d} | Loss: {loss.item():.4f} | {gate_stats(gate)}")
+
+    for p in reg.model.parameters():
+        p.requires_grad_(False)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Autoregressive fine-tuning aligned with rolling eval."
+    )
+    parser.add_argument("--dataset", default=DEFAULT_DATASET, help="Dataset key in the config file.")
+    parser.add_argument("--config", default=DATASET_CONFIG_PATH, help="Path to dataset config YAML.")
+    args = parser.parse_args()
+
+    dataset_cfg = load_dataset_config(args.config, args.dataset)
+    data_path = dataset_cfg.get("data_path")
+    date_column = dataset_cfg.get("date_column")
+    numeric_features = dataset_cfg.get("numeric_features")
+    target_column = dataset_cfg.get("target_column")
+    embedding_columns = dataset_cfg.get("embedding_columns")
+    embedding_lags = dataset_cfg.get("embedding_lags")
+    embedding_column_template = dataset_cfg.get("embedding_column_template")
+
+    if args.dataset:
+        print(f"Using dataset '{args.dataset}' from {args.config}")
+    else:
+        print(f"Using dataset config {args.config}")
+
+    X, y, text = load_climate_dataset(
+        path=data_path,
+        date_column=date_column,
+        numeric_features=numeric_features,
+        target_column=target_column,
+        embedding_lags=embedding_lags,
+        embedding_columns=embedding_columns,
+        embedding_column_template=embedding_column_template,
+        max_rows=MAX_ROWS,
+    )
+    if X.shape[1] == 0:
+        X = np.zeros((X.shape[0], 1), dtype=np.float32)
+
+    (
+        X_context,
+        y_context,
+        text_context,
+        X_tune,
+        y_tune,
+        text_tune,
+        X_eval,
+        y_eval,
+        text_eval,
+    ) = time_split(
+        X,
+        y,
+        text,
+        context_ratio=CONTEXT_RATIO,
+        tune_ratio=TUNE_RATIO,
+        eval_ratio=EVAL_RATIO,
+    )
+    print(f"Split sizes: context={len(y_context)} tune={len(y_tune)} eval={len(y_eval)}")
+
+    reg = load_tabdpt_regressor(device=DEVICE, model_weight_path=MODEL_WEIGHT_PATH, text_enhanced=True)
+    reg.fit(X_context, y_context, text_context)
+
+    reduction_mode = None
+    reduction_payload = None
+    X_context_proc = preprocess_features(
+        reg,
+        X_context,
+        reduction_mode=reduction_mode,
+        reduction_payload=reduction_payload,
+    )
+    X_tune_proc = preprocess_features(
+        reg,
+        X_tune,
+        reduction_mode=reduction_mode,
+        reduction_payload=reduction_payload,
+    )
+    X_eval_proc = preprocess_features(
+        reg,
+        X_eval,
+        reduction_mode=reduction_mode,
+        reduction_payload=reduction_payload,
+    )
+
+    print("\n== Baseline (before tuning) ==")
+    eval_context_proc = np.concatenate((X_context_proc, X_tune_proc))
+    eval_y_context = np.concatenate((y_context, y_tune))
+    eval_text_context = np.concatenate((text_context, text_tune), axis=0)
+    baseline_no_text = evaluate_rolling(
+        reg,
+        X_context_proc=eval_context_proc,
+        y_context=eval_y_context,
+        text_context=eval_text_context,
+        X_eval_proc=X_eval_proc,
+        y_eval=y_eval,
+        text_eval=text_eval,
+        use_text=False,
+        label="Eval (no text attn)",
+        max_context=MAX_CONTEXT_FOR_EVAL,
+    )
+    baseline_text = evaluate_rolling(
+        reg,
+        X_context_proc=eval_context_proc,
+        y_context=eval_y_context,
+        text_context=eval_text_context,
+        X_eval_proc=X_eval_proc,
+        y_eval=y_eval,
+        text_eval=text_eval,
+        use_text=True,
+        label="Eval (with text attn)",
+        max_context=MAX_CONTEXT_FOR_EVAL,
+    )
+
+    print("\n== Fine-tuning alpha gate (autoregressive) ==")
+    fine_tune_gate_autoregressive(reg, X_tune=X_tune, y_tune=y_tune, text_tune=text_tune)
+
+    print("\n== After tuning ==")
+    tuned_no_text = evaluate_rolling(
+        reg,
+        X_context_proc=eval_context_proc,
+        y_context=eval_y_context,
+        text_context=eval_text_context,
+        X_eval_proc=X_eval_proc,
+        y_eval=y_eval,
+        text_eval=text_eval,
+        use_text=False,
+        label="Eval (no text attn)",
+        max_context=MAX_CONTEXT_FOR_EVAL,
+    )
+    tuned_text = evaluate_rolling(
+        reg,
+        X_context_proc=eval_context_proc,
+        y_context=eval_y_context,
+        text_context=eval_text_context,
+        X_eval_proc=X_eval_proc,
+        y_eval=y_eval,
+        text_eval=text_eval,
+        use_text=True,
+        label="Eval (with text attn)",
+        max_context=MAX_CONTEXT_FOR_EVAL,
+    )
+
+    print("\n== Summary ==")
+    _format_metrics("Baseline (no text attn)", *baseline_no_text)
+    _format_metrics("Baseline (with text attn)", *baseline_text)
+    _format_metrics("Tuned (no text attn)", *tuned_no_text)
+    _format_metrics("Tuned (with text attn)", *tuned_text)
 
 
 if __name__ == "__main__":

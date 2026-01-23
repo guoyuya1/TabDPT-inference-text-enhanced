@@ -1,0 +1,19 @@
+data_path: data/processed_data/economy/Economy_with_text_with_embeddings_lag_3.csv
+date_column: date
+numeric_features:
+  - Exports
+  - Imports
+target_column: OT
+embedding_columns:
+  - embedding_report_fact_lag0
+  - embedding_report_fact_lag1
+  - embedding_report_fact_lag2
+  - embedding_report_fact_lag3
+  - embedding_search_fact_lag0
+  - embedding_search_fact_lag1
+  - embedding_search_fact_lag2
+  - embedding_search_fact_lag3
+  - embedding_report_fact_search_fact_lag0
+  - embedding_report_fact_search_fact_lag1
+  - embedding_report_fact_search_fact_lag2
+  - embedding_report_fact_search_fact_lag3

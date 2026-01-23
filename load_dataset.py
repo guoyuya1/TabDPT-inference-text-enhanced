@@ -21,6 +21,7 @@ def load_climate_dataset(
     embedding_lags: list[int],
     embedding_columns: list[str] | None,
     embedding_column_template: str | None,
+    max_rows: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Load numeric features + target + text embeddings.
@@ -36,6 +37,9 @@ def load_climate_dataset(
     if date_column and date_column in df.columns:
         df[date_column] = pd.to_datetime(df[date_column])
         df = df.sort_values(date_column).reset_index(drop=True)
+
+    if max_rows is not None:
+        df = df.head(max_rows).reset_index(drop=True)
 
     for col in [*numeric_features, target_column]:
         if col not in df.columns:

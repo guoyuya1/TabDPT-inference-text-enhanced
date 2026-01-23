@@ -128,7 +128,7 @@ def preprocess_data_climate():
 
 def preprocess_data_bitcoin():
     # Load bitcoin dataframe
-    df = pd.read_csv("../MultimodalForcast/data/bitcoin/bitcoin_final_with_embeddings_lag_3.csv")
+    df = pd.read_csv("/home/mzzhang/tabdpt/data/bitcoin/bitcoin_final_with_embeddings_lag_3.csv").head(1000)
 
     # Sort by date if available
     if "date" in df.columns:
@@ -159,7 +159,7 @@ def preprocess_data_bitcoin():
     text_embeddings_all = extract_and_stack_embeddings(df, embedding_cols)
 
     # Split based on date (time series split)
-    split_ratio = 0.95
+    split_ratio = 0.763
     split_idx = int(len(df) * split_ratio)
 
     # Alternatively, you can use a specific date:
@@ -210,9 +210,10 @@ def main():
     # Preprocess data and time series split
     X_train, X_test, y_train, y_test, train_text, test_text = preprocess_data_bitcoin()
 
-    X_test = X_test[:10]
-    y_test = y_test[:10]
-    test_text = test_text[:10]
+    N = 1
+    X_test = X_test[:N]
+    y_test = y_test[:N]
+    test_text = test_text[:N]
     
     # Initialize regressor with text_enhanced=True
     print("Initializing TabDPTRegressor...")
@@ -238,7 +239,7 @@ def main():
     
     # Test gating values from 0 to 1, convert to raw alpha using inverse sigmoid
     print(f"\nTesting gating values (sigmoid of alpha) from 0.0 to 1.0 in steps of 0.1...")
-    print(f"{'Gating':<12} {'Alpha (raw)':<18} {'MSE Loss':<12} {'RMSE':<12}")
+    print(f"{'Gating':<12} {'Alpha (raw)':<18} {'MSE Loss':<12} {'MAE Loss':<12} {'RMSE':<12}")
     print("-" * 60)
     
     results = []
@@ -271,7 +272,8 @@ def main():
             
             # Calculate MSE loss on test set
             mse_loss = torch.nn.functional.mse_loss(preds, y_test_tensor)
-            
+            # Calculate MAE (Mean Absolute Error)
+            mae_loss = torch.nn.functional.l1_loss(preds, y_test_tensor)
             # Calculate RMSE (Root Mean Squared Error)
             rmse = torch.sqrt(mse_loss)
         
@@ -279,17 +281,19 @@ def main():
         results.append({
             'gating': gating_val,
             'alpha_raw': alpha_raw,
+            'mae_loss': mae_loss.item(),
             'mse_loss': mse_loss.item(),
             'rmse': rmse.item()
         })
-        
-        print(f"{gating_val:<12.1f} {alpha_raw:<18.6f} {mse_loss.item():<12.4f} {rmse.item():<12.4f}")
+
+        print(f"{gating_val:<12.1f} {alpha_raw:<18.6f} {mse_loss.item():<12.4f} {mae_loss.item():<12.4f} {rmse.item():<12.4f}")
     
     # Find best gating value (based on MSE loss)
     best_result = min(results, key=lambda x: x['mse_loss'])
     print(f"\nBest gating value: {best_result['gating']:.1f}")
     print(f"Best alpha (raw): {best_result['alpha_raw']:.6f}")
     print(f"Best MSE loss: {best_result['mse_loss']:.4f}")
+    print(f"Best MAE loss: {best_result['mae_loss']:.4f}")
     print(f"Best RMSE: {best_result['rmse']:.4f}")
 
 

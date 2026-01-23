@@ -25,6 +25,9 @@ one per attention head. The forward pass applies `sigmoid()` to obtain values in
 
 from __future__ import annotations
 
+import argparse
+import os
+
 import numpy as np
 import torch
 from sklearn.metrics import mean_absolute_error, mean_squared_error
@@ -36,6 +39,8 @@ except Exception:  # noqa: BLE001
 
 from tabdpt import TabDPTRegressor
 from tabdpt.utils import pad_x
+from omegaconf import OmegaConf
+
 from eval_fine_tune import _format_metrics, evaluate_rolling
 from load_dataset import load_climate_dataset
 from split_ts import time_split
@@ -51,36 +56,36 @@ np.random.seed(0)
 # -----------------------------
 # Step 1) Configuration
 # -----------------------------
-# DATA_PATH = "data/climate_ttc/climate_2014_2023_final_with_embeddings_lag_3.csv"
-# DATE_COLUMN = "date"
-# TARGET_COLUMN = "temp"
-# NUMERIC_FEATURES = ["precip_lag0","precip_lag1","precip_lag2","precip_lag3",
-#                     "humidity_lag0","humidity_lag1","humidity_lag2","humidity_lag3",
-#                     "windspeed_lag0","windspeed_lag1","windspeed_lag2","windspeed_lag3",
-#                     "temp_lag0","temp_lag1","temp_lag2","temp_lag3"]
-
 DATA_PATH = "data/bitcoin/bitcoin_final_with_embeddings_lag_3.csv"
 DATE_COLUMN = "Date"
-NUMERIC_FEATURES = ["Open_lag1", "Open_lag2", "Open_lag3",
-                    "High_lag1", "High_lag2", "High_lag3",
-                    "Low_lag1", "Low_lag2", "Low_lag3",
-                    "Close_lag1", "Close_lag2", "Close_lag3",
-                    "Adj_Close_lag1", "Adj_Close_lag2", "Adj_Close_lag3"]
-TARGET_COLUMN="Adj_Close"
-
+NUMERIC_FEATURES = [
+    "Open_lag1", "Open_lag2", "Open_lag3",
+    "High_lag1", "High_lag2", "High_lag3",
+    "Low_lag1", "Low_lag2", "Low_lag3",
+    "Close_lag1", "Close_lag2", "Close_lag3",
+    "Adj_Close_lag1", "Adj_Close_lag2", "Adj_Close_lag3",
+]
+TARGET_COLUMN = "Adj_Close"
+TEXT_FEATURE_NAME = "summary_gpt-5-mini"
 
 # Text lags to use (your regressor averages similarity across the L dimension).
-TEXT_EMBEDDING_LAGS = [1, 2, 3]
+TEXT_EMBEDDING_LAGS = [0, 1, 2, 3]
 # Either provide an explicit list of embedding columns, or a template for lags.
 # If EMBEDDING_COLUMNS is not None, it takes precedence.
 EMBEDDING_COLUMNS = None
-EMBEDDING_COLUMN_TEMPLATE = "embedding_summary_gpt-5-mini_lag{lag}"
+EMBEDDING_COLUMN_TEMPLATE = f"embedding_{TEXT_FEATURE_NAME}_lag{{lag}}"
+
+# Dataset config file (YAML) for a single dataset.
+DATASET_CONFIG_PATH = "configs/bitcoin.yaml"
+DEFAULT_DATASET = None
 
 # Use chronological splits to avoid leakage in time series.
+# Optional cap to limit the dataset size.
+MAX_ROWS = 1000
 # Fraction-based split: three ratios that must sum to 1.0.
 CONTEXT_RATIO = 0.2
-TUNE_RATIO = 0.6
-EVAL_RATIO = 0.2
+TUNE_RATIO = 0.65
+EVAL_RATIO = 0.15
 # How many new tune rows to add per batch step.
 TUNE_BATCH_SIZE = 4
 # Optional: cap the training context length during tuning to avoid OOM.
@@ -95,7 +100,7 @@ DEVICE = None  # e.g., "cuda:0" or "cpu"
 USE_FLASH = True
 COMPILE_MODEL = True
 # Fine-tuning hyperparameters (we tune only a few numbers: per-head gate logits).
-EPOCHS = 10
+EPOCHS = 20
 LEARNING_RATE = 1e-4  # kept for backward compatibility; see GATE_LR below
 LOG_EVERY = 5  # epoch-level logging cadence
 STEP_LOG_EVERY = 10  # step-level logging inside each epoch
@@ -128,6 +133,40 @@ MAX_CONTEXT_FOR_TUNE_EVAL = MAX_CONTEXT_FOR_TUNE
 # -----------------------------
 # Step 2) Data loading utilities
 # -----------------------------
+
+def load_dataset_config(config_path: str, dataset_name: str | None) -> dict:
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"Dataset config not found: {config_path}")
+    config = OmegaConf.to_container(OmegaConf.load(config_path), resolve=True)
+    if not isinstance(config, dict):
+        raise ValueError(f"Dataset config must be a mapping: {config_path}")
+
+    if dataset_name:
+        if dataset_name not in config:
+            if "data_path" in config:
+                raise ValueError(
+                    f"Config {config_path} looks like a single dataset; omit --dataset."
+                )
+            available = ", ".join(sorted(config.keys()))
+            raise ValueError(f"Unknown dataset '{dataset_name}'. Available: {available}")
+        dataset_cfg = config[dataset_name]
+    else:
+        dataset_cfg = config
+        if "data_path" not in dataset_cfg:
+            raise ValueError(
+                f"Config {config_path} contains multiple datasets; pass --dataset."
+            )
+
+    required = ["data_path", "numeric_features", "target_column", "embedding_columns"]
+    missing = [key for key in required if key not in dataset_cfg]
+    if missing:
+        label = dataset_name or os.path.basename(config_path)
+        raise ValueError(f"Dataset '{label}' missing keys: {', '.join(missing)}")
+    if not isinstance(dataset_cfg["numeric_features"], list):
+        raise ValueError(f"Dataset '{dataset_name}' numeric_features must be a list.")
+    if not isinstance(dataset_cfg["embedding_columns"], list):
+        raise ValueError(f"Dataset '{dataset_name}' embedding_columns must be a list.")
+    return dataset_cfg
 
 def load_tabdpt_regressor(
     *,
@@ -397,16 +436,39 @@ def fine_tune_external_gate(
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Fine-tune alpha gate on a configured dataset.")
+    parser.add_argument("--dataset", default=DEFAULT_DATASET, help="Dataset key in the config file.")
+    parser.add_argument("--config", default=DATASET_CONFIG_PATH, help="Path to dataset config YAML.")
+    args = parser.parse_args()
+
+    dataset_cfg = load_dataset_config(args.config, args.dataset)
+    data_path = dataset_cfg.get("data_path", DATA_PATH)
+    date_column = dataset_cfg.get("date_column", DATE_COLUMN)
+    numeric_features = dataset_cfg.get("numeric_features", NUMERIC_FEATURES)
+    target_column = dataset_cfg.get("target_column", TARGET_COLUMN)
+    embedding_columns = dataset_cfg.get("embedding_columns", EMBEDDING_COLUMNS)
+    embedding_lags = dataset_cfg.get("embedding_lags", TEXT_EMBEDDING_LAGS)
+    embedding_column_template = dataset_cfg.get("embedding_column_template", EMBEDDING_COLUMN_TEMPLATE)
+
+    if args.dataset:
+        print(f"Using dataset '{args.dataset}' from {args.config}")
+    else:
+        print(f"Using dataset config {args.config}")
+
     # Step 1: load the dataset
     X, y, text = load_climate_dataset(
-        path=DATA_PATH,
-        date_column=DATE_COLUMN,
-        numeric_features=NUMERIC_FEATURES,
-        target_column=TARGET_COLUMN,
-        embedding_lags=TEXT_EMBEDDING_LAGS,
-        embedding_columns=EMBEDDING_COLUMNS,
-        embedding_column_template=EMBEDDING_COLUMN_TEMPLATE,
+        path=data_path,
+        date_column=date_column,
+        numeric_features=numeric_features,
+        target_column=target_column,
+        embedding_lags=embedding_lags,
+        embedding_columns=embedding_columns,
+        embedding_column_template=embedding_column_template,
+        max_rows=MAX_ROWS,
     )
+    if X.shape[1] == 0:
+        # TabDPT expects at least one numeric feature; use a constant placeholder.
+        X = np.zeros((X.shape[0], 1), dtype=np.float32)
 
     # Step 2: split chronologically
     (
