@@ -5,3 +5,12 @@ uv.lock
 .venv/
 eval_output/
 build/
+
+# Generated experiment artifacts
+results/
+
+# Generated plot batches
+figures/manual_pass_alpha_rolling/
+
+# Local datasets and exports
+*.csv
