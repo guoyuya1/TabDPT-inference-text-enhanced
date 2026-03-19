@@ -5,7 +5,6 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from huggingface_hub import hf_hub_download
-from omegaconf import OmegaConf
 from safetensors import safe_open
 from sklearn.base import BaseEstimator
 from sklearn.impute import SimpleImputer
@@ -15,6 +14,33 @@ from sklearn.utils.validation import check_is_fitted
 from .model import TabDPTModel
 from .utils import FAISS, convert_to_torch_tensor, Log1pScaler, generate_random_permutation
 from typing import Union
+
+try:
+    from omegaconf import OmegaConf
+except ImportError:
+    class _AttrDict(dict):
+        def __getattr__(self, item):
+            try:
+                return self[item]
+            except KeyError as exc:
+                raise AttributeError(item) from exc
+
+        def __setattr__(self, key, value):
+            self[key] = value
+
+    class _OmegaConfCompat:
+        @staticmethod
+        def create(value):
+            def _to_obj(obj):
+                if isinstance(obj, dict):
+                    return _AttrDict({k: _to_obj(v) for k, v in obj.items()})
+                if isinstance(obj, list):
+                    return [_to_obj(v) for v in obj]
+                return obj
+
+            return _to_obj(value)
+
+    OmegaConf = _OmegaConfCompat
 
 # Constants for model caching and download
 _VERSION = "1_1"
@@ -217,23 +243,24 @@ class TabDPTEstimator(BaseEstimator):
             
     
     # text enhancement
-    def _compute_attn_weight_pairwise_avg(self, train_text: Union[np.ndarray, torch.Tensor], text_test: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+    def _compute_attn_weight_pairwise_avg(
+        self,
+        train_text: Union[np.ndarray, torch.Tensor],
+        text_test: Union[np.ndarray, torch.Tensor],
+        text_scale_factor: float = 1.0,
+    ) -> torch.Tensor:
         sim_by_text_feature = self._compute_pairwise_text_similarity(train_text, text_test)
         
         # Check if batched (4D) or not (3D)
         has_batch = len(sim_by_text_feature.shape) == 4
+        scale = torch.as_tensor(text_scale_factor, device=sim_by_text_feature.device, dtype=sim_by_text_feature.dtype)
         
         if has_batch:
             # Batched: (B, L, N_test, N_train)
             # Mean over lag dimension (L) - equivalent to non-batched mean(dim=0) but with batch dim
-            logits = sim_by_text_feature.mean(dim=1)  # (B, N_test, N_train)
-
-
-            # # Softmax over train dimension - equivalent to non-batched softmax(dim=-1)
-            # attn_weight = torch.softmax(logits, dim=-1)  # (B, N_test, N_train)
-
-            # Return raw cosine-logit scores (model will apply per-head affine + softmax)
-            attn_weight = logits  # (B, N_test, N_train)
+            logits = sim_by_text_feature.mean(dim=1) * scale  # (B, N_test, N_train)
+            # Softmax over train dimension - equivalent to non-batched softmax(dim=-1)
+            attn_weight = torch.softmax(logits, dim=-1)  # (B, N_test, N_train)
             
             # Add N_train x N_train zeros matrix on top for each batch
             # N_train here is the context size (from the batch), not the full training set size
@@ -242,9 +269,8 @@ class TabDPTEstimator(BaseEstimator):
             return torch.cat([zeros_top, attn_weight], dim=1)  # (B, N_train_context + N_test, N_train_context)
         else:
             # Non-batched: (L, N_test, N_train)
-            logits = sim_by_text_feature.mean(dim=0)  # (N_test, N_train)
-            # Return raw cosine-logit scores (model will apply per-head affine + softmax)
-            attn_weight = logits  # (N_test, N_train)
+            logits = sim_by_text_feature.mean(dim=0) * scale  # (N_test, N_train)
+            attn_weight = torch.softmax(logits, dim=-1)  # (N_test, N_train)
             
             # Add N_train x N_train zeros matrix on top
             N_train = self.X_train.shape[0]

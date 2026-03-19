@@ -1,10 +1,16 @@
 from functools import wraps
 from typing import Literal
-
-import faiss
 import numpy as np
 import torch
+
 from torch.nn.attention import SDPBackend, sdpa_kernel
+
+try:
+    import faiss
+    _HAS_FAISS = True
+except ImportError:
+    faiss = None
+    _HAS_FAISS = False
 
 
 def generate_random_permutation(N, seed=None):
@@ -89,20 +95,46 @@ class FAISS:
         X = np.ascontiguousarray(X)
         X = X.astype(np.float32)
         if metric == "l2":
-            self.index = faiss.IndexFlatL2(X.shape[1])
+            if _HAS_FAISS:
+                self.index = faiss.IndexFlatL2(X.shape[1])
+            else:
+                self.index = X
         elif metric == "ip":
-            self.index = faiss.IndexFlatIP(X.shape[1])
+            if _HAS_FAISS:
+                self.index = faiss.IndexFlatIP(X.shape[1])
+            else:
+                self.index = X
         else:
             raise ValueError('metric must be "l2" or "ip"')
-        self.index.add(X)
+        self.metric = metric
+        if _HAS_FAISS:
+            self.index.add(X)
+        else:
+            self._is_fitted = X.shape[0]
 
     def get_knn_indices(self, queries, k):
         if isinstance(queries, torch.Tensor):
             queries = queries.cpu().numpy()
         queries = np.ascontiguousarray(queries)
         assert isinstance(k, int)
+        if k <= 0:
+            raise ValueError("k must be positive")
+        if queries.ndim == 1:
+            queries = queries[None, :]
+        k = min(k, self._is_fitted)
 
-        knns = self.index.search(queries, k)
+        if _HAS_FAISS:
+            knns = self.index.search(queries, k)
+        else:
+            if self.metric == "l2":
+                dists = np.linalg.norm(queries[:, None, :] - self.index[None, :, :], axis=-1)
+                knns = np.argsort(dists, axis=1)[:, :k]
+            else:
+                scores = queries @ self.index.T
+                knns = np.argsort(-scores, axis=1)[:, :k]
+            class _FakeKNN(tuple):
+                pass
+            knns = _FakeKNN((None, knns))
         indices_Xs = knns[1]
         return indices_Xs
 
