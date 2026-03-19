@@ -1,0 +1,28 @@
+{
+  "model_name": "Qwen/Qwen3-Embedding-0.6B",
+  "lag_days": 3,
+  "batch_size": 16,
+  "max_length": 1024,
+  "device": "cpu",
+  "na_text": "n/a",
+  "datasets": [
+    {
+      "csv_path": "./data/source_data/energy/v2/Energy_with_text_gpt_analyzed_baseline.csv",
+      "text_column": "search_fact_summary_gpt_5_2",
+      "numerical_columns": null,
+      "output_csv_path": "data/source_data/energy/v2/Energy_with_text_gpt_analyzed_baseline_with_embeddings_lag_3.csv"
+    },
+    {
+      "csv_path": "./data/source_data/energy/v2/Energy_with_text_gpt_analyzed_concise.csv",
+      "text_column": "search_fact_summary_gpt_5_2",
+      "numerical_columns": null,
+      "output_csv_path": "data/source_data/energy/v2/Energy_with_text_gpt_analyzed_concise_with_embeddings_lag_3.csv"
+    },
+    {
+      "csv_path": "./data/source_data/energy/v2/Energy_with_text_summarized_concise.csv",
+      "text_column": "search_fact_summary_gpt_5_2",
+      "numerical_columns": null,
+      "output_csv_path": "data/source_data/energy/v2/Energy_with_text_summarized_concise_with_embeddings_lag_3.csv"
+    }
+  ]
+}
