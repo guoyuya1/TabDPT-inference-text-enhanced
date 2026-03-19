@@ -27,7 +27,7 @@ lag_days = 3  # number of prior days to include (in addition to current)
 batch_size = 16
 max_length = 1024
 device = "cuda" if torch.cuda.is_available() else "cpu"
-output_csv_path = None
+target_output_path = None
 normalize_embeddings = False
 na_text = "n/a"
 text_column_hints = ("text", "fact", "report", "search", "headline", "summary")
@@ -191,6 +191,21 @@ def default_output_path(csv_path: Path, lag_days: int) -> Path:
     return csv_path.with_name(output_name)
 
 
+def render_target_output_path(
+    template: str,
+    *,
+    model_name: str,
+    lag_days: int,
+) -> Path:
+    safe_model_name = str(model_name).replace("/", "-")
+    rendered = template.format(
+        model_name=safe_model_name,
+        lag=lag_days,
+        lag_days=lag_days,
+    )
+    return Path(rendered)
+
+
 def parse_args(args: Sequence[str] | None = None) -> argparse.Namespace:
     pre_parser = argparse.ArgumentParser(add_help=False)
     pre_parser.add_argument("--config", default=None)
@@ -202,9 +217,11 @@ def parse_args(args: Sequence[str] | None = None) -> argparse.Namespace:
         else None
     )
     config_source_path = config.get("source_csv_path") or config.get("csv_path")
-    config_output_path = config.get("output_csv_path")
+    config_target_output_path = config.get("target_output_path")
     config_source_path = resolve_config_path(config_source_path, config_dir)
-    config_output_path = resolve_config_path(config_output_path, config_dir)
+    config_target_output_path = resolve_config_path(
+        config_target_output_path, config_dir
+    )
 
     parser = argparse.ArgumentParser(
         description="Create embeddings with lagged text features for a CSV."
@@ -223,7 +240,7 @@ def parse_args(args: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--date-column", default=argparse.SUPPRESS)
     parser.add_argument("--lag-days", type=int, default=argparse.SUPPRESS)
-    parser.add_argument("--output-csv-path", default=argparse.SUPPRESS)
+    parser.add_argument("--target-output-path", default=argparse.SUPPRESS)
     parser.add_argument("--model-name", default=argparse.SUPPRESS)
     parser.add_argument("--batch-size", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--max-length", type=int, default=argparse.SUPPRESS)
@@ -241,7 +258,7 @@ def parse_args(args: Sequence[str] | None = None) -> argparse.Namespace:
         "target_columns": config.get("target_columns"),
         "date_column": config.get("date_column", date_column),
         "lag_days": config.get("lag_days", lag_days),
-        "output_csv_path": config_output_path or output_csv_path,
+        "target_output_path": config_target_output_path or target_output_path,
         "model_name": config.get("model_name", model_name),
         "batch_size": config.get("batch_size", batch_size),
         "max_length": config.get("max_length", max_length),
@@ -362,8 +379,12 @@ def main(args: Sequence[str] | None = None) -> None:
             model.stop_multi_process_pool(pool)
 
     resolved_output_path = (
-        Path(parsed.output_csv_path)
-        if parsed.output_csv_path
+        render_target_output_path(
+            parsed.target_output_path,
+            model_name=parsed.model_name,
+            lag_days=parsed.lag_days,
+        )
+        if parsed.target_output_path
         else default_output_path(resolved_csv_path, parsed.lag_days)
     )
     resolved_output_path.parent.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,23 @@
+source_csv_path: bitcoin_price_news_gpt52_one_sentence_concise_summary.csv
+target_output_path: ../../processed_data/bitcoin/bitcoin_price_news_gpt52_one_sentence_concise_summary_with_embeddings_{model_name}_lag_{lag}.csv
+
+text_columns:
+  - summary_gpt-5.2
+
+numerical_columns:
+  - Open
+  - High
+  - Low
+  - Close
+  - Adj_Close
+  - Volume
+
+target_columns:
+  - Close
+
+date_column: Date
+model_name: Qwen/Qwen3-Embedding-8B # Qwen/Qwen3-Embedding-0.6B
+lag_days: 7
+batch_size: 8
+max_length: 1024
+na_text: n/a
