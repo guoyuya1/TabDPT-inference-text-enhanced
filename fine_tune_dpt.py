@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import os
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -39,7 +40,22 @@ except Exception:  # noqa: BLE001
 
 from tabdpt import TabDPTRegressor
 from tabdpt.utils import pad_x
-from omegaconf import OmegaConf
+try:
+    from omegaconf import OmegaConf
+except ImportError:
+    import yaml
+
+    class _OmegaConfCompat:
+        @staticmethod
+        def load(path):
+            with open(Path(path), "r", encoding="utf-8") as f:
+                return yaml.safe_load(f)
+
+        @staticmethod
+        def to_container(value, resolve: bool = True):  # noqa: ARG001
+            return value
+
+    OmegaConf = _OmegaConfCompat
 
 from eval_fine_tune import _format_metrics, evaluate_rolling
 from load_dataset import load_climate_dataset
@@ -229,13 +245,19 @@ def get_last_layer_gate_param(reg: TabDPTRegressor) -> torch.nn.Parameter:
     return last_block.alpha
 
 
-def freeze_all_but_last_gate(reg: TabDPTRegressor) -> torch.nn.Parameter:
-    """Freeze all parameters and enable gradients only for the last block's alpha gate."""
+def freeze_all_but_last_gate(reg: TabDPTRegressor) -> tuple[torch.nn.Parameter, list[torch.nn.Parameter]]:
+    """Freeze all parameters except the last block's alpha gate + per-head text linear layers."""
     for p in reg.model.parameters():
         p.requires_grad_(False)
+    last_block = reg.model.transformer_encoder[-1]
     gate = get_last_layer_gate_param(reg)
     gate.requires_grad_(True)
-    return gate
+    tunable_params: list[torch.nn.Parameter] = [gate]
+    for linear in last_block.text_attn_linears:
+        for p in linear.parameters():
+            p.requires_grad_(True)
+            tunable_params.append(p)
+    return gate, tunable_params
 
 
 def gate_stats(gate_logits: torch.Tensor) -> str:
@@ -272,7 +294,7 @@ def fine_tune_external_gate(
     text_eval: np.ndarray | None = None,
 ) -> None:
     """
-    Fine-tune only the last layer's gate on the tune split.
+    Fine-tune only the last layer's text mixing parameters (alpha gate + per-head text affine).
 
     Why call the model directly?
     - `reg.predict()` disables gradients, so we can't optimize with it.
@@ -286,14 +308,14 @@ def fine_tune_external_gate(
     - Loss = MSE on that current row (raw space)
     """
     # (1) Select tunable params (gate only) and build optimizer.
-    gate = freeze_all_but_last_gate(reg)
+    gate, tunable_params = freeze_all_but_last_gate(reg)
     # Use Schedule-Free AdamW when available; fall back to AdamW otherwise.
     if schedulefree is None:
         print("WARNING: `schedulefree` not installed; falling back to torch.optim.AdamW.")
-        optimizer = torch.optim.AdamW([gate], lr=GATE_LR, weight_decay=0.0)
+        optimizer = torch.optim.AdamW(tunable_params, lr=GATE_LR, weight_decay=0.0)
     else:
         # optimizer = schedulefree.AdamWScheduleFree(model.parameters(), lr=lr, weight_decay=0.0)
-        optimizer = schedulefree.AdamWScheduleFree([gate], lr=GATE_LR, weight_decay=0.0)
+        optimizer = schedulefree.AdamWScheduleFree(tunable_params, lr=GATE_LR, weight_decay=0.0)
     print("Tuning last-layer alpha gate:", gate_stats(gate))
 
     # (3) Rolling-window gradient loop (with base context then growing window)
