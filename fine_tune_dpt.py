@@ -34,10 +34,16 @@ import torch
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
 try:
+    import matplotlib.pyplot as plt
+except Exception:  # noqa: BLE001
+    plt = None
+
+try:
     import schedulefree  # type: ignore
 except Exception:  # noqa: BLE001
     schedulefree = None
 
+import tabdpt.model as tabdpt_model
 from tabdpt import TabDPTRegressor
 from tabdpt.utils import pad_x
 try:
@@ -144,6 +150,7 @@ EVAL_EACH_EPOCH = False
 MAX_CONTEXT_FOR_EVAL = MAX_CONTEXT_FOR_TUNE
 # Optional context cap during rolling tuning-set eval (None uses full context).
 MAX_CONTEXT_FOR_TUNE_EVAL = MAX_CONTEXT_FOR_TUNE
+PLOT_OUTPUT_ROOT = Path("results/fine_tune_plots")
 
 
 # -----------------------------
@@ -299,6 +306,358 @@ def linear_stats(reg: TabDPTRegressor) -> str:
         line += ")"
         summaries.append(line)
     return " ".join(summaries)
+
+
+class _AttentionScoreRecorder:
+    """Monkey-patch attention helper to capture last-layer raw attention weights."""
+
+    def __init__(self) -> None:
+        self._original_fn = None
+        self.last_attn_weight: torch.Tensor | None = None
+
+    def __enter__(self) -> "_AttentionScoreRecorder":
+        self._original_fn = tabdpt_model._scaled_dot_product_attention_with_attention_scores
+
+        def _wrapped(*args, **kwargs):
+            attn_logit, attn_weight, attn_out = self._original_fn(*args, **kwargs)
+            self.last_attn_weight = attn_weight.detach()
+            return attn_logit, attn_weight, attn_out
+
+        tabdpt_model._scaled_dot_product_attention_with_attention_scores = _wrapped
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if self._original_fn is not None:
+            tabdpt_model._scaled_dot_product_attention_with_attention_scores = self._original_fn
+
+
+def _rolling_predict_values(
+    reg: TabDPTRegressor,
+    *,
+    X_context_proc: np.ndarray,
+    y_context: np.ndarray,
+    text_context: np.ndarray,
+    X_eval_proc: np.ndarray,
+    y_eval: np.ndarray,
+    text_eval: np.ndarray,
+    max_context: int | None,
+    use_text: bool,
+) -> np.ndarray:
+    """Return rolling predictions using the same logic as eval metrics."""
+    reg.model.eval()
+    preds = np.zeros(len(y_eval), dtype=np.float32)
+    with torch.no_grad():
+        for idx in range(len(y_eval)):
+            X_train_full = np.concatenate((X_context_proc, X_eval_proc[:idx]))
+            y_train_full = np.concatenate((y_context, y_eval[:idx]))
+            if use_text:
+                text_train_full = np.concatenate((text_context, text_eval[:idx]), axis=0)
+
+            if max_context is not None:
+                X_train_step = X_train_full[-max_context:]
+                y_train_step = y_train_full[-max_context:]
+                if use_text:
+                    text_train_step = text_train_full[-max_context:]
+            else:
+                X_train_step = X_train_full
+                y_train_step = y_train_full
+                if use_text:
+                    text_train_step = text_train_full
+
+            X_test_step = X_eval_proc[idx:idx + 1]
+            if use_text:
+                train_text_batch = text_train_step[None, ...]
+                test_text_batch = text_eval[idx:idx + 1][None, ...]
+                text_enhanced_attn_weight = reg._compute_attn_weight_pairwise_avg(
+                    train_text_batch,
+                    test_text_batch,
+                )
+            else:
+                text_enhanced_attn_weight = None
+
+            X_train_tensor = torch.tensor(X_train_step, dtype=torch.float32, device=reg.device).unsqueeze(0)
+            X_train_tensor = pad_x(X_train_tensor, reg.max_features)
+            X_test_tensor = torch.tensor(X_test_step, dtype=torch.float32, device=reg.device).unsqueeze(0)
+            X_test_tensor = pad_x(X_test_tensor, reg.max_features)
+            y_context_tensor = torch.tensor(y_train_step, dtype=torch.float32, device=reg.device).unsqueeze(0)
+
+            pred = reg.model(
+                x_src=torch.cat([X_train_tensor, X_test_tensor], dim=1),
+                y_src=y_context_tensor.unsqueeze(-1),
+                task="reg",
+                text_enhanced_attn_weight=text_enhanced_attn_weight,
+            )
+            preds[idx] = pred.squeeze(-1).reshape(-1).detach().cpu().numpy()[0]
+    return preds
+
+
+def _rolling_largest_attn_regular_vs_blended(
+    reg: TabDPTRegressor,
+    *,
+    X_context_proc: np.ndarray,
+    y_context: np.ndarray,
+    text_context: np.ndarray,
+    X_eval_proc: np.ndarray,
+    y_eval: np.ndarray,
+    text_eval: np.ndarray,
+    max_context: int | None,
+    ) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Return the largest regular and blended last-layer attention weights per eval row.
+
+    The regular attention weight comes from the model's raw last-layer attention before text
+    mixing. The blended attention weight applies the current tuned gate and per-head text
+    transforms on top of that raw attention.
+    """
+    reg.model.eval()
+    largest_attn_regular = np.zeros(len(y_eval), dtype=np.float32)
+    largest_attn_blended = np.zeros(len(y_eval), dtype=np.float32)
+    last_block = reg.model.transformer_encoder[-1]
+    gate = get_last_layer_gate_param(reg)
+    with _AttentionScoreRecorder() as recorder:
+        with torch.no_grad():
+            for idx in range(len(y_eval)):
+                X_train_full = np.concatenate((X_context_proc, X_eval_proc[:idx]))
+                y_train_full = np.concatenate((y_context, y_eval[:idx]))
+                text_train_full = np.concatenate((text_context, text_eval[:idx]), axis=0)
+
+                if max_context is not None:
+                    X_train_step = X_train_full[-max_context:]
+                    y_train_step = y_train_full[-max_context:]
+                    text_train_step = text_train_full[-max_context:]
+                else:
+                    X_train_step = X_train_full
+                    y_train_step = y_train_full
+                    text_train_step = text_train_full
+
+                X_test_step = X_eval_proc[idx:idx + 1]
+                train_text_batch = text_train_step[None, ...]
+                test_text_batch = text_eval[idx:idx + 1][None, ...]
+                text_enhanced_attn_weight = reg._compute_attn_weight_pairwise_avg(
+                    train_text_batch,
+                    test_text_batch,
+                )
+
+                X_train_tensor = torch.tensor(X_train_step, dtype=torch.float32, device=reg.device).unsqueeze(0)
+                X_train_tensor = pad_x(X_train_tensor, reg.max_features)
+                X_test_tensor = torch.tensor(X_test_step, dtype=torch.float32, device=reg.device).unsqueeze(0)
+                X_test_tensor = pad_x(X_test_tensor, reg.max_features)
+                y_context_tensor = torch.tensor(y_train_step, dtype=torch.float32, device=reg.device).unsqueeze(0)
+
+                reg.model(
+                    x_src=torch.cat([X_train_tensor, X_test_tensor], dim=1),
+                    y_src=y_context_tensor.unsqueeze(-1),
+                    task="reg",
+                    text_enhanced_attn_weight=text_enhanced_attn_weight,
+                )
+
+                if recorder.last_attn_weight is None:
+                    raise RuntimeError("Failed to capture attention weights during eval plotting.")
+                eval_pos = len(y_train_step)
+                raw_test = recorder.last_attn_weight[:, :, eval_pos:, :]
+                largest_attn_regular[idx] = float(raw_test.max().detach().cpu().item())
+
+                ext_test = text_enhanced_attn_weight[:, eval_pos:, :].unsqueeze(1).repeat(
+                    1, raw_test.shape[1], 1, 1
+                )
+                head_logits = []
+                for head_idx, proj in enumerate(last_block.text_attn_linears):
+                    head_logit = ext_test[:, head_idx:head_idx + 1, :, :]
+                    head_logit = proj(head_logit.unsqueeze(-1)).squeeze(-1)
+                    head_logits.append(head_logit)
+                ext_logits = torch.cat(head_logits, dim=1)
+                ext_weights = torch.softmax(ext_logits, dim=-1)
+
+                gate_prob = torch.sigmoid(gate.detach()).view(1, raw_test.shape[1], 1, 1)
+                mixed_test = raw_test * gate_prob + (1 - gate_prob) * ext_weights
+                largest_attn_blended[idx] = float(mixed_test.max().detach().cpu().item())
+
+    return largest_attn_regular, largest_attn_blended
+
+
+def _plot_eval_mae_curves(
+    *,
+    abs_error_regular: np.ndarray,
+    abs_error_blended: np.ndarray,
+    output_path: Path,
+) -> None:
+    if plt is None:
+        print("Matplotlib unavailable. Skipping eval MAE plot.")
+        return
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    idx = np.arange(1, len(abs_error_regular) + 1, dtype=np.float32)
+    mae_regular = np.cumsum(abs_error_regular) / idx
+    mae_blended = np.cumsum(abs_error_blended) / idx
+    plt.figure(figsize=(12, 5))
+    plt.plot(mae_blended, label="fine-tuned text attention", linewidth=1.4, color="tab:orange", alpha=0.9)
+    plt.plot(mae_regular, label="reg attention", linewidth=1.6, linestyle="--", color="tab:blue")
+    plt.title("Eval Cumulative MAE")
+    plt.xlabel("Eval Index")
+    plt.ylabel("MAE")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(output_path)
+    plt.close()
+
+
+def _plot_eval_mae_delta(
+    *,
+    abs_error_regular: np.ndarray,
+    abs_error_blended: np.ndarray,
+    output_path: Path,
+) -> None:
+    if plt is None:
+        print("Matplotlib unavailable. Skipping eval MAE-delta plot.")
+        return
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    idx = np.arange(1, len(abs_error_regular) + 1, dtype=np.float32)
+    mae_regular = np.cumsum(abs_error_regular) / idx
+    mae_blended = np.cumsum(abs_error_blended) / idx
+    mae_delta = mae_blended - mae_regular
+    plt.figure(figsize=(12, 5))
+    plt.plot(mae_delta, label="MAE_fine_tuned - MAE_reg", linewidth=1.4, color="tab:red")
+    plt.axhline(0.0, color="black", linewidth=1.0, linestyle="--")
+    plt.title("Eval Cumulative MAE Delta")
+    plt.xlabel("Eval Index")
+    plt.ylabel("MAE Delta")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(output_path)
+    plt.close()
+
+
+def _plot_eval_pointwise_mae(
+    *,
+    abs_error_regular: np.ndarray,
+    abs_error_blended: np.ndarray,
+    output_path: Path,
+) -> None:
+    if plt is None:
+        print("Matplotlib unavailable. Skipping eval pointwise-MAE plot.")
+        return
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.figure(figsize=(12, 5))
+    plt.plot(
+        abs_error_blended,
+        label="fine-tuned text attention",
+        linewidth=1.4,
+        color="tab:orange",
+        alpha=0.9,
+    )
+    plt.plot(
+        abs_error_regular,
+        label="reg attention",
+        linewidth=1.6,
+        linestyle="--",
+        color="tab:blue",
+    )
+    plt.title("Eval Pointwise Absolute Error")
+    plt.xlabel("Eval Index")
+    plt.ylabel("|y - pred|")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(output_path)
+    plt.close()
+
+
+def _plot_eval_largest_attn(
+    *,
+    largest_attn_regular: np.ndarray,
+    largest_attn_blended: np.ndarray,
+    output_path: Path,
+) -> None:
+    if plt is None:
+        print("Matplotlib unavailable. Skipping eval largest-attention plot.")
+        return
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.figure(figsize=(12, 5))
+    plt.plot(largest_attn_blended, label="blended attention", linewidth=1.4, color="tab:orange", alpha=0.9)
+    plt.plot(largest_attn_regular, label="reg attention", linewidth=1.6, linestyle="--", color="tab:blue")
+    plt.title("Largest Attention Weight per Eval Index")
+    plt.xlabel("Eval Index")
+    plt.ylabel("Largest Attention Weight")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(output_path)
+    plt.close()
+
+
+def plot_eval_regular_vs_tuned_text(
+    reg: TabDPTRegressor,
+    *,
+    X_context_proc: np.ndarray,
+    y_context: np.ndarray,
+    text_context: np.ndarray,
+    X_eval_proc: np.ndarray,
+    y_eval: np.ndarray,
+    text_eval: np.ndarray,
+    max_context: int | None,
+    output_dir: Path,
+) -> None:
+    preds_regular = _rolling_predict_values(
+        reg,
+        X_context_proc=X_context_proc,
+        y_context=y_context,
+        text_context=text_context,
+        X_eval_proc=X_eval_proc,
+        y_eval=y_eval,
+        text_eval=text_eval,
+        max_context=max_context,
+        use_text=False,
+    )
+    preds_blended = _rolling_predict_values(
+        reg,
+        X_context_proc=X_context_proc,
+        y_context=y_context,
+        text_context=text_context,
+        X_eval_proc=X_eval_proc,
+        y_eval=y_eval,
+        text_eval=text_eval,
+        max_context=max_context,
+        use_text=True,
+    )
+    largest_attn_regular, largest_attn_blended = _rolling_largest_attn_regular_vs_blended(
+        reg,
+        X_context_proc=X_context_proc,
+        y_context=y_context,
+        text_context=text_context,
+        X_eval_proc=X_eval_proc,
+        y_eval=y_eval,
+        text_eval=text_eval,
+        max_context=max_context,
+    )
+
+    abs_error_regular = np.abs(y_eval - preds_regular)
+    abs_error_blended = np.abs(y_eval - preds_blended)
+
+    mae_plot_path = output_dir / "eval_mae_reg_vs_tuned_text.png"
+    pointwise_mae_plot_path = output_dir / "eval_pointwise_mae_reg_vs_tuned_text.png"
+    mae_delta_plot_path = output_dir / "eval_mae_tuned_minus_reg.png"
+    largest_attn_plot_path = output_dir / "eval_largest_attn_reg_vs_blended.png"
+    _plot_eval_mae_curves(
+        abs_error_regular=abs_error_regular,
+        abs_error_blended=abs_error_blended,
+        output_path=mae_plot_path,
+    )
+    _plot_eval_pointwise_mae(
+        abs_error_regular=abs_error_regular,
+        abs_error_blended=abs_error_blended,
+        output_path=pointwise_mae_plot_path,
+    )
+    _plot_eval_mae_delta(
+        abs_error_regular=abs_error_regular,
+        abs_error_blended=abs_error_blended,
+        output_path=mae_delta_plot_path,
+    )
+    _plot_eval_largest_attn(
+        largest_attn_regular=largest_attn_regular,
+        largest_attn_blended=largest_attn_blended,
+        output_path=largest_attn_plot_path,
+    )
+    print(f"Saved eval MAE plot to {mae_plot_path}")
+    print(f"Saved eval pointwise-MAE plot to {pointwise_mae_plot_path}")
+    print(f"Saved eval MAE-delta plot to {mae_delta_plot_path}")
+    print(f"Saved eval largest-attention plot to {largest_attn_plot_path}")
 
 
 def predict_one_point_with_context(
@@ -738,6 +1097,19 @@ def main() -> None:
             f"ΔRMSE={delta_rmse:.6f} | ΔMAPE={delta_mape:.6f}%"
         )
     print("Tuned text-mixing gate:", gate_stats(get_last_layer_gate_param(reg)))
+
+    plot_dir = PLOT_OUTPUT_ROOT / (args.dataset or Path(data_path).stem)
+    plot_eval_regular_vs_tuned_text(
+        reg,
+        X_context_proc=eval_context_proc,
+        y_context=eval_y_context,
+        text_context=eval_text_context,
+        X_eval_proc=X_eval_proc,
+        y_eval=y_eval,
+        text_eval=text_eval,
+        max_context=MAX_CONTEXT_FOR_EVAL,
+        output_dir=plot_dir,
+    )
 
     print("\n== Baseline (before tuning) ==")
     _format_metrics("Tune (no text attn)", *baseline_no_text_tune)
