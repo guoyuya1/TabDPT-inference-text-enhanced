@@ -103,7 +103,7 @@ CONTEXT_RATIO = 0.2
 TUNE_RATIO = 0.65
 EVAL_RATIO = 0.15
 # How many new tune rows to add per batch step.
-TUNE_BATCH_SIZE = 4
+TUNE_BATCH_SIZE = 650
 # Optional: cap the training context length during tuning to avoid OOM.
 # If None, use all available context; if an int, keep only the last K rows of
 # [global_context + past_tune] when building each training window.
@@ -119,7 +119,7 @@ COMPILE_MODEL = True
 EPOCHS = 20
 LEARNING_RATE = 1e-4  # kept for backward compatibility; see GATE_LR below
 LOG_EVERY = 5  # epoch-level logging cadence
-STEP_LOG_EVERY = 10  # step-level logging inside each epoch
+STEP_LOG_EVERY = 50  # step-level logging inside each epoch
 
 # Diagnostics: compare eval metrics with/without text attention.
 DEBUG_TEXT_EFFECT = True
@@ -264,14 +264,41 @@ def gate_stats(gate_logits: torch.Tensor) -> str:
     """Human-readable summary for per-head gate logits and their sigmoid values."""
     logits = gate_logits.detach().float().cpu().reshape(-1)
     gate = torch.sigmoid(logits)
-    sample_count = min(8, gate.numel())
-    sample_vals = torch.round(gate[:sample_count], decimals=4).tolist()
-    sample_str = f"{sample_vals}" if gate.numel() <= sample_count else f"{sample_vals}..."
+    sample_count = min(6, gate.numel())
+    sample_vals = gate[:sample_count].tolist()
+    sample_str = ", ".join(f"{v:.3f}" for v in sample_vals)
+    if gate.numel() > sample_count:
+        sample_str = f"{sample_str}, ..."
     return (
         f"logits(mean/min/max)={logits.mean().item():.4f}/{logits.min().item():.4f}/{logits.max().item():.4f} | "
         f"sigmoid(mean/min/max)={gate.mean().item():.4f}/{gate.min().item():.4f}/{gate.max().item():.4f} | "
-        f"sigmoid(sample)={sample_str}"
+        f"sigmoid(sample)=[{sample_str}]"
     )
+
+
+def linear_stats(reg: TabDPTRegressor) -> str:
+    """Compact one-line summary for last block text linear layer parameters."""
+    last_block = reg.model.transformer_encoder[-1]
+    summaries: list[str] = []
+    for idx, proj in enumerate(last_block.text_attn_linears):
+        # Support both plain nn.Linear and nn.Sequential(Linear, GELU, ...).
+        linear = proj
+        if not hasattr(linear, "weight"):
+            linear = next((m for m in proj.modules() if isinstance(m, torch.nn.Linear)), None)
+            if linear is None:
+                summaries.append(f"L{idx}(no-linear)")
+                continue
+
+        weight = linear.weight.detach().float().cpu().reshape(-1)
+        w_val = weight.item() if weight.numel() == 1 else weight.mean().item()
+        line = f"L{idx}(w={w_val:.3f}"
+        if linear.bias is not None:
+            bias = linear.bias.detach().float().cpu().reshape(-1)
+            b_val = bias.item() if bias.numel() == 1 else bias.mean().item()
+            line += f", b={b_val:.3f}"
+        line += ")"
+        summaries.append(line)
+    return " ".join(summaries)
 
 
 # -----------------------------
@@ -316,7 +343,7 @@ def fine_tune_external_gate(
     else:
         # optimizer = schedulefree.AdamWScheduleFree(model.parameters(), lr=lr, weight_decay=0.0)
         optimizer = schedulefree.AdamWScheduleFree(tunable_params, lr=GATE_LR, weight_decay=0.0)
-    print("Tuning last-layer alpha gate:", gate_stats(gate))
+    print("Tuning last-layer text-mixing params")
 
     # (3) Rolling-window gradient loop (with base context then growing window)
     reg.model.eval()
@@ -394,8 +421,12 @@ def fine_tune_external_gate(
                 mae = mean_absolute_error(y_target.detach().cpu().numpy(), preds_np)
                 print(
                     f"Epoch {epoch:02d} Step {step_idx+1:03d}/{num_steps} "
-                    f"(rows {start}–{end-1}) | MAE: {mae:.4f} | RMSE: {rmse:.4f} | {gate_stats(gate)}"
+                    f"| MAE: {mae:.4f} | RMSE: {rmse:.4f}"
                 )
+        print(
+            f"Epoch {epoch:02d} text-mixing params | "
+            f"gate: {gate_stats(gate)} | {linear_stats(reg)}"
+        )
         if EVAL_EACH_EPOCH:
             if X_eval is None or X_eval_proc is None or y_eval is None or text_eval is None:
                 raise ValueError("EVAL_EACH_EPOCH requires X_eval, X_eval_proc, y_eval, and text_eval.")
@@ -600,10 +631,10 @@ def main() -> None:
             f"Eval text effect | ΔMAE={delta_mae:.6f} | "
             f"ΔRMSE={delta_rmse:.6f} | ΔMAPE={delta_mape:.6f}%"
         )
-    print("Initial gate:", gate_stats(get_last_layer_gate_param(reg)))
+    print("Initial text-mixing gate:", gate_stats(get_last_layer_gate_param(reg)))
 
     # Step 5: fine-tune gate on tune split
-    print("\n== Fine-tuning alpha gate ==")
+    print("\n== Fine-tuning text-mixing parameters ==")
     fine_tune_external_gate(
         reg,
         X_context_proc=X_context_proc,
@@ -682,7 +713,7 @@ def main() -> None:
             f"Eval text effect | ΔMAE={delta_mae:.6f} | "
             f"ΔRMSE={delta_rmse:.6f} | ΔMAPE={delta_mape:.6f}%"
         )
-    print("Tuned gate:", gate_stats(get_last_layer_gate_param(reg)))
+    print("Tuned text-mixing gate:", gate_stats(get_last_layer_gate_param(reg)))
 
     print("\n== Baseline (before tuning) ==")
     _format_metrics("Tune (no text attn)", *baseline_no_text_tune)
