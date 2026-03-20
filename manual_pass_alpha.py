@@ -161,6 +161,7 @@ def preprocess_data_bitcoin():
     # Split based on date (time series split)
     split_ratio = 0.763
     split_idx = int(len(df) * split_ratio)
+    split_idx = 400
 
     # Alternatively, you can use a specific date:
     # split_date = "2022-12-05"
@@ -276,6 +277,13 @@ def main():
             mae_loss = torch.nn.functional.l1_loss(preds, y_test_tensor)
             # Calculate RMSE (Root Mean Squared Error)
             rmse = torch.sqrt(mse_loss)
+            
+            # Calculate MAE (Mean Absolute Error)
+            mae = torch.nn.functional.l1_loss(preds, y_test_tensor)
+            
+            # Convert predictions and true values to numpy for storage/display
+            preds_np = preds.cpu().numpy()
+            y_true_np = y_test_tensor.cpu().numpy()
         
         # Store results
         results.append({
@@ -295,6 +303,9 @@ def main():
     print(f"Best MSE loss: {best_result['mse_loss']:.4f}")
     print(f"Best MAE loss: {best_result['mae_loss']:.4f}")
     print(f"Best RMSE: {best_result['rmse']:.4f}")
+    print(f"Best MAE: {best_result['mae']:.4f}")
+    print(f"Predictions: {best_result['prediction']}")
+    print(f"True Y: {best_result['true_y']}")
 
 
 

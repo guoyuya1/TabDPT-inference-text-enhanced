@@ -229,10 +229,11 @@ def get_last_layer_gate_param(reg: TabDPTRegressor) -> torch.nn.Parameter:
     return last_block.alpha
 
 
-def freeze_all_but_last_gate(reg: TabDPTRegressor) -> torch.nn.Parameter:
-    """Freeze all parameters and enable gradients only for the last block's alpha gate."""
+def freeze_all_but_last_gate(reg: TabDPTRegressor) -> tuple[torch.nn.Parameter, list[torch.nn.Parameter]]:
+    """Freeze all parameters except the last block's alpha gate + per-head text linear layers."""
     for p in reg.model.parameters():
         p.requires_grad_(False)
+    last_block = reg.model.transformer_encoder[-1]
     gate = get_last_layer_gate_param(reg)
     gate.requires_grad_(True)
     return gate
