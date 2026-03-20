@@ -138,7 +138,7 @@ GATE_REG_STRENGTH = 0
 FREEZE_NO_TEXT_BASELINE = True
 
 # Run a full eval (no-text + text) after each epoch during fine-tuning.
-EVAL_EACH_EPOCH = True
+EVAL_EACH_EPOCH = False
 
 # Optional context cap during rolling eval (None uses full context).
 MAX_CONTEXT_FOR_EVAL = MAX_CONTEXT_FOR_TUNE
@@ -301,6 +301,45 @@ def linear_stats(reg: TabDPTRegressor) -> str:
     return " ".join(summaries)
 
 
+def predict_one_point_with_context(
+    reg: TabDPTRegressor,
+    *,
+    X_context_proc: np.ndarray,
+    y_context: np.ndarray,
+    text_context: np.ndarray,
+    X_eval_row_proc: np.ndarray,
+    text_eval_row: np.ndarray,
+    max_context: int | None,
+) -> torch.Tensor:
+    """Predict one row from a provided rolling context."""
+    if max_context is not None:
+        X_context_step = X_context_proc[-max_context:]
+        y_context_step = y_context[-max_context:]
+        text_context_step = text_context[-max_context:]
+    else:
+        X_context_step = X_context_proc
+        y_context_step = y_context
+        text_context_step = text_context
+
+    train_text_batch = text_context_step[None, ...]
+    test_text_batch = text_eval_row[None, ...]
+    attn_weight_external = reg._compute_attn_weight_pairwise_avg(train_text_batch, test_text_batch)
+
+    X_train_tensor = torch.tensor(X_context_step, dtype=torch.float32, device=reg.device).unsqueeze(0)
+    X_train_tensor = pad_x(X_train_tensor, reg.max_features)
+    X_test_tensor = torch.tensor(X_eval_row_proc, dtype=torch.float32, device=reg.device).unsqueeze(0)
+    X_test_tensor = pad_x(X_test_tensor, reg.max_features)
+    y_context_tensor = torch.tensor(y_context_step, dtype=torch.float32, device=reg.device).unsqueeze(0)
+
+    pred = reg.model(
+        x_src=torch.cat([X_train_tensor, X_test_tensor], dim=1),
+        y_src=y_context_tensor.unsqueeze(-1),
+        task="reg",
+        text_enhanced_attn_weight=attn_weight_external,
+    )
+    return pred.squeeze(-1).reshape(-1)
+
+
 # -----------------------------
 # Step 6) Fine-tuning loop (calls reg.model directly)
 # Rolling window: at step i, train on context + tune[0:i], predict tune[i].
@@ -330,9 +369,9 @@ def fine_tune_external_gate(
         - text similarity attention via `_compute_attn_weight_pairwise_avg(...)`
 
     Rolling window (per step inside each epoch):
-    - Train set = context + all prior tune rows
-    - Test row = current tune row
-    - Loss = MSE on that current row (raw space)
+    - Fixed context = global context + tune rows before this batch
+    - Within the batch, each row is predicted from base context plus earlier batch rows
+    - Gradients are accumulated point-by-point and averaged over the batch
     """
     # (1) Select tunable params (gate only) and build optimizer.
     gate, tunable_params = freeze_all_but_last_gate(reg)
@@ -358,55 +397,40 @@ def fine_tune_external_gate(
             start = step_idx * TUNE_BATCH_SIZE
             end = min(len(y_tune), start + TUNE_BATCH_SIZE)
 
-            # Base context portion inside the tune set + accumulated history.
-            base_cap = MAX_CONTEXT_FOR_TUNE if MAX_CONTEXT_FOR_TUNE is not None else len(y_tune)
-            base_limit = min(base_cap, len(y_tune))
-            past_limit = max(base_limit, start)
+            current_batch_size = end - start
+            preds_for_log: list[torch.Tensor] = []
 
-            # Train set for this step: global context + tune[0:past_limit]
-            X_train_full = np.concatenate((X_context_proc, X_tune_proc[:past_limit]))
-            y_train_full = np.concatenate((y_context, y_tune[:past_limit]))
-            text_train_full = np.concatenate((text_context, text_tune[:past_limit]), axis=0)
+            for point_idx in range(start, end):
+                X_point_context = np.concatenate((X_context_proc, X_tune_proc[:point_idx]))
+                y_point_context = np.concatenate((y_context, y_tune[:point_idx]))
+                text_point_context = np.concatenate((text_context, text_tune[:point_idx]), axis=0)
 
-            # Apply optional context cap to avoid long sequences (OOM protection).
-            if MAX_CONTEXT_FOR_TUNE is not None:
-                X_train_step = X_train_full[-MAX_CONTEXT_FOR_TUNE:]
-                y_train_step = y_train_full[-MAX_CONTEXT_FOR_TUNE:]
-                text_train_step = text_train_full[-MAX_CONTEXT_FOR_TUNE:]
-            else:
-                X_train_step = X_train_full
-                y_train_step = y_train_full
-                text_train_step = text_train_full
+                pred_point = predict_one_point_with_context(
+                    reg,
+                    X_context_proc=X_point_context,
+                    y_context=y_point_context,
+                    text_context=text_point_context,
+                    X_eval_row_proc=X_tune_proc[point_idx:point_idx + 1],
+                    text_eval_row=text_tune[point_idx:point_idx + 1],
+                    max_context=MAX_CONTEXT_FOR_TUNE,
+                )
+                preds_for_log.append(pred_point.detach())
 
-            # Test batch for this step: tune[start:end]
-            X_test_step = X_tune_proc[start:end]
-            y_target = torch.tensor(y_tune[start:end], dtype=torch.float32, device=reg.device)
+                y_point_target = torch.tensor(
+                    y_tune[point_idx:point_idx + 1],
+                    dtype=torch.float32,
+                    device=reg.device,
+                )
+                point_loss = torch.nn.functional.mse_loss(pred_point, y_point_target)
+                (point_loss / current_batch_size).backward()
 
-            train_text_batch = text_train_step[None, ...]
-            test_text_batch = text_tune[start:end][None, ...]
-            attn_weight_external = reg._compute_attn_weight_pairwise_avg(train_text_batch, test_text_batch)
-
-            X_train_tensor = torch.tensor(X_train_step, dtype=torch.float32, device=reg.device).unsqueeze(0)
-            X_train_tensor = pad_x(X_train_tensor, reg.max_features)
-            X_test_tensor = torch.tensor(X_test_step, dtype=torch.float32, device=reg.device).unsqueeze(0)
-            X_test_tensor = pad_x(X_test_tensor, reg.max_features)
-            y_context_tensor = torch.tensor(y_train_step, dtype=torch.float32, device=reg.device).unsqueeze(0)
-
-            preds = reg.model(
-                x_src=torch.cat([X_train_tensor, X_test_tensor], dim=1),
-                y_src=y_context_tensor.unsqueeze(-1),
-                task="reg",
-                text_enhanced_attn_weight=attn_weight_external,
-            )
-            preds = preds.squeeze(-1).reshape(-1)
-
-            loss = torch.nn.functional.mse_loss(preds, y_target)
             if GATE_REG_STRENGTH and GATE_REG_STRENGTH > 0:
                 gate_prob = torch.sigmoid(gate)
                 gate_reg = (gate_prob * (1 - gate_prob)).mean()
-                loss = loss + GATE_REG_STRENGTH * gate_reg
+                (GATE_REG_STRENGTH * gate_reg).backward()
 
-            loss.backward()
+            preds = torch.cat(preds_for_log, dim=0)
+            y_target = torch.tensor(y_tune[start:end], dtype=torch.float32, device=reg.device)
             optimizer.step()
 
             # Optional stability clamp in logit space (NOT in [0,1] space).
