@@ -227,8 +227,13 @@ class TabDPTEstimator(BaseEstimator):
             # Batched: (B, L, N_test, N_train)
             # Mean over lag dimension (L) - equivalent to non-batched mean(dim=0) but with batch dim
             logits = sim_by_text_feature.mean(dim=1)  # (B, N_test, N_train)
-            # Softmax over train dimension - equivalent to non-batched softmax(dim=-1)
-            attn_weight = torch.softmax(logits, dim=-1)  # (B, N_test, N_train)
+
+
+            # # Softmax over train dimension - equivalent to non-batched softmax(dim=-1)
+            # attn_weight = torch.softmax(logits, dim=-1)  # (B, N_test, N_train)
+
+            # Return raw cosine-logit scores (model will apply per-head affine + softmax)
+            attn_weight = logits  # (B, N_test, N_train)
             
             # Add N_train x N_train zeros matrix on top for each batch
             # N_train here is the context size (from the batch), not the full training set size
@@ -238,7 +243,8 @@ class TabDPTEstimator(BaseEstimator):
         else:
             # Non-batched: (L, N_test, N_train)
             logits = sim_by_text_feature.mean(dim=0)  # (N_test, N_train)
-            attn_weight = torch.softmax(logits, dim=-1)  # (N_test, N_train)
+            # Return raw cosine-logit scores (model will apply per-head affine + softmax)
+            attn_weight = logits  # (N_test, N_train)
             
             # Add N_train x N_train zeros matrix on top
             N_train = self.X_train.shape[0]

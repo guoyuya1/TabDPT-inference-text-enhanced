@@ -150,7 +150,21 @@ class TransformerEncoderLayer(nn.Module):
             # one alpha for all heads
             # self.alpha = nn.Parameter(torch.zeros(1))
             # Per-head gating parameter: one alpha per attention head
+            # initialize gating value =0.5
             self.alpha = nn.Parameter(torch.zeros(num_heads))
+
+            # initialize gating value roughly to 1
+            # Initialize to a large positive logit so sigmoid(alpha) starts ~1.0.
+            self.alpha = nn.Parameter(torch.full((num_heads,), 10.0))
+            # One per-head projection for text attention logits: Linear -> GELU.
+            self.text_attn_linears = nn.ModuleList(
+                [nn.Sequential(nn.Linear(1, 1), nn.GELU()) for _ in range(num_heads)]
+            )
+            
+            with torch.no_grad():
+                for proj in self.text_attn_linears:
+                    proj[0].weight.fill_(1.0)
+                    proj[0].bias.zero_()
             
             # self.register_buffer('ts_gating_val', torch.ones(1))
 
@@ -188,6 +202,14 @@ class TransformerEncoderLayer(nn.Module):
             attn_weight_test = attn_weight[:, :, eval_pos:, :]  # (B, num_heads, N_test, N_train)
             # Apply blending only to test part - slice text_enhanced_attn_weight to match test positions
             text_enhanced_attn_weight_test = text_enhanced_attn_weight[:, :, eval_pos:, :]  # (B, num_heads, N_test, N_train)
+            # Apply one trainable linear transform per head to cosine logits, then softmax.
+            head_logits = []
+            for h in range(self.num_heads):
+                head_logit = text_enhanced_attn_weight_test[:, h:h + 1, :, :]  # (B, 1, N_test, N_train)
+                head_logit = self.text_attn_linears[h](head_logit.unsqueeze(-1)).squeeze(-1)
+                head_logits.append(head_logit)
+            text_enhanced_attn_logits_test = torch.cat(head_logits, dim=1)
+            text_enhanced_attn_weight_test = torch.softmax(text_enhanced_attn_logits_test, dim=-1)
             attn_weight_test = attn_weight_test * ts_gating_val + (1 - ts_gating_val) * text_enhanced_attn_weight_test
             # Concatenate back
             attn_weight = torch.cat([attn_weight_train, attn_weight_test], dim=2)  # (B, num_heads, N, N_train)
