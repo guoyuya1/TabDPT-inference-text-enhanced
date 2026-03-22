@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -34,16 +35,10 @@ import torch
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
 try:
-    import matplotlib.pyplot as plt
-except Exception:  # noqa: BLE001
-    plt = None
-
-try:
     import schedulefree  # type: ignore
 except Exception:  # noqa: BLE001
     schedulefree = None
 
-import tabdpt.model as tabdpt_model
 from tabdpt import TabDPTRegressor
 from tabdpt.utils import pad_x
 try:
@@ -64,146 +59,104 @@ except ImportError:
     OmegaConf = _OmegaConfCompat
 
 from eval_fine_tune import _format_metrics, evaluate_rolling
-from load_dataset import load_climate_dataset
+from load_dataset import load_tabular_text_dataset
 from split_ts import time_split
 
 
 # -----------------------------
-# Step 0) Reproducibility
+# Step 0) Runtime configuration
 # -----------------------------
-torch.manual_seed(0)
-np.random.seed(0)
+@dataclass(frozen=True)
+class ModelConfig:
+    device: str | None
+    model_weight_path: str | None
+    text_enhanced: bool
+    use_flash: bool
+    compile_model: bool
 
 
-# -----------------------------
-# Step 1) Configuration
-# -----------------------------
-DATA_PATH = "data/bitcoin/bitcoin_final_with_embeddings_lag_3.csv"
-DATE_COLUMN = "Date"
-NUMERIC_FEATURES = [
-    "Open_lag1", "Open_lag2", "Open_lag3",
-    "High_lag1", "High_lag2", "High_lag3",
-    "Low_lag1", "Low_lag2", "Low_lag3",
-    "Close_lag1", "Close_lag2", "Close_lag3",
-    "Adj_Close_lag1", "Adj_Close_lag2", "Adj_Close_lag3",
-]
-TARGET_COLUMN = "Adj_Close"
-TEXT_FEATURE_NAME = "summary_gpt-5-mini"
+@dataclass(frozen=True)
+class TuningConfig:
+    epochs: int
+    gate_lr: float
+    gate_logit_clamp: float | None
+    gate_reg_strength: float
+    tune_batch_size: int
+    max_context_for_tune: int | None
+    max_context_for_eval: int | None
+    max_context_for_tune_eval: int | None
+    eval_each_epoch: bool
+    debug_text_effect: bool
+    freeze_no_text_baseline: bool
+    step_log_every: int
 
-# Text lags to use (your regressor averages similarity across the L dimension).
-TEXT_EMBEDDING_LAGS = [0, 1, 2, 3]
-# Either provide an explicit list of embedding columns, or a template for lags.
-# If EMBEDDING_COLUMNS is not None, it takes precedence.
-EMBEDDING_COLUMNS = None
-EMBEDDING_COLUMN_TEMPLATE = f"embedding_{TEXT_FEATURE_NAME}_lag{{lag}}"
 
-# Dataset config file (YAML) for a single dataset.
-DATASET_CONFIG_PATH = "configs/bitcoin.yaml"
-DEFAULT_DATASET = None
-
-# Use chronological splits to avoid leakage in time series.
-# Optional cap to limit the dataset size.
-MAX_ROWS = 1000
-# Fraction-based split: three ratios that must sum to 1.0.
-CONTEXT_RATIO = 0.2
-TUNE_RATIO = 0.65
-EVAL_RATIO = 0.15
-# How many new tune rows to add per batch step.
-TUNE_BATCH_SIZE = 650
-# Optional: cap the training context length during tuning to avoid OOM.
-# If None, use all available context; if an int, keep only the last K rows of
-# [global_context + past_tune] when building each training window.
-MAX_CONTEXT_FOR_TUNE = 1000
-
-# Model loading / inference options.
-# Set MODEL_WEIGHT_PATH to a local .safetensors file to avoid HF downloads.
-MODEL_WEIGHT_PATH = None
-DEVICE = None  # e.g., "cuda:0" or "cpu"
-USE_FLASH = True
-COMPILE_MODEL = True
-# Fine-tuning hyperparameters (we tune only a few numbers: per-head gate logits).
-EPOCHS = 20
-LEARNING_RATE = 1e-4  # kept for backward compatibility; see GATE_LR below
-LOG_EVERY = 5  # epoch-level logging cadence
-STEP_LOG_EVERY = 50  # step-level logging inside each epoch
-
-# Diagnostics: compare eval metrics with/without text attention.
-DEBUG_TEXT_EFFECT = True
-
-# Use a higher LR for the gate to encourage it to move away from ~0.5 if helpful.
-GATE_LR = 5e-1
-
-# Optional: clamp gate *logits* to avoid extreme saturation of sigmoid.
-GATE_LOGIT_CLAMP = 10.0
-
-# Optional: encourage gate probabilities away from 0.5 (toward extremes).
-# Minimizing gate*(1-gate) pushes sigmoids toward 0 or 1. Set to 0.0 to disable.
-GATE_REG_STRENGTH = 0
-
-# Reuse the no-text baseline metrics after tuning to avoid nondeterministic drift.
-FREEZE_NO_TEXT_BASELINE = True
-
-# Run a full eval (no-text + text) after each epoch during fine-tuning.
-EVAL_EACH_EPOCH = False
-
-# Optional context cap during rolling eval (None uses full context).
-MAX_CONTEXT_FOR_EVAL = MAX_CONTEXT_FOR_TUNE
-# Optional context cap during rolling tuning-set eval (None uses full context).
-MAX_CONTEXT_FOR_TUNE_EVAL = MAX_CONTEXT_FOR_TUNE
-PLOT_OUTPUT_ROOT = Path("results/fine_tune_plots")
-
+@dataclass(frozen=True)
+class DataConfig:
+    data_path: str
+    date_column: str | None
+    numeric_features: list[str]
+    target_column: str
+    embedding_lags: list[int]
+    embedding_columns: list[str] | None
+    embedding_column_template: str | None
+    max_rows: int | None
+    context_ratio: float
+    tune_ratio: float
+    eval_ratio: float
+    seed: int
+    model: ModelConfig
+    tuning: TuningConfig
 
 # -----------------------------
-# Step 2) Data loading utilities
+# Step 1) Data loading utilities
 # -----------------------------
 
 def load_dataset_config(config_path: str, dataset_name: str | None) -> dict:
     if not os.path.exists(config_path):
         raise FileNotFoundError(f"Dataset config not found: {config_path}")
     config = OmegaConf.to_container(OmegaConf.load(config_path), resolve=True)
-    if not isinstance(config, dict):
-        raise ValueError(f"Dataset config must be a mapping: {config_path}")
+    if dataset_name is None:
+        return config
+    return config[dataset_name]
 
-    if dataset_name:
-        if dataset_name not in config:
-            if "data_path" in config:
-                raise ValueError(
-                    f"Config {config_path} looks like a single dataset; omit --dataset."
-                )
-            available = ", ".join(sorted(config.keys()))
-            raise ValueError(f"Unknown dataset '{dataset_name}'. Available: {available}")
-        dataset_cfg = config[dataset_name]
-    else:
-        dataset_cfg = config
-        if "data_path" not in dataset_cfg:
-            raise ValueError(
-                f"Config {config_path} contains multiple datasets; pass --dataset."
-            )
 
-    required = ["data_path", "numeric_features", "target_column", "embedding_columns"]
-    missing = [key for key in required if key not in dataset_cfg]
-    if missing:
-        label = dataset_name or os.path.basename(config_path)
-        raise ValueError(f"Dataset '{label}' missing keys: {', '.join(missing)}")
-    if not isinstance(dataset_cfg["numeric_features"], list):
-        raise ValueError(f"Dataset '{dataset_name}' numeric_features must be a list.")
-    if not isinstance(dataset_cfg["embedding_columns"], list):
-        raise ValueError(f"Dataset '{dataset_name}' embedding_columns must be a list.")
-    return dataset_cfg
+def load_fine_tune_config(config_path: str, dataset_name: str | None) -> DataConfig:
+    dataset_cfg = dict(load_dataset_config(config_path, dataset_name))
+    dataset_cfg.setdefault("embedding_lags", [])
+    dataset_cfg.setdefault("embedding_columns", None)
+    dataset_cfg.setdefault("embedding_column_template", None)
+    dataset_cfg["model"] = ModelConfig(**dataset_cfg["model"])
+    dataset_cfg["tuning"] = TuningConfig(
+        **{
+            key: dataset_cfg["tuning"][key]
+            for key in TuningConfig.__dataclass_fields__
+            if key in dataset_cfg["tuning"]
+        }
+    )
+    dataset_cfg = {
+        key: dataset_cfg[key]
+        for key in DataConfig.__dataclass_fields__
+        if key in dataset_cfg
+    }
+    return DataConfig(**dataset_cfg)
 
 def load_tabdpt_regressor(
     *,
     device: str | None,
     model_weight_path: str | None,
-    text_enhanced: bool = True,
+    text_enhanced: bool,
+    use_flash: bool,
+    compile_model: bool,
 ) -> TabDPTRegressor:
-    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    if device in (None, "auto"):
+        device = "cuda" if torch.cuda.is_available() else "cpu"
     return TabDPTRegressor(
         device=device,
         text_enhanced=text_enhanced,
         model_weight_path=model_weight_path,
-        use_flash=USE_FLASH,
-        compile=COMPILE_MODEL,
+        use_flash=use_flash,
+        compile=compile_model,
     )
 
 
@@ -308,397 +261,6 @@ def linear_stats(reg: TabDPTRegressor) -> str:
     return " ".join(summaries)
 
 
-class _AttentionScoreRecorder:
-    """Monkey-patch attention helper to capture last-layer raw attention weights."""
-
-    def __init__(self) -> None:
-        self._original_fn = None
-        self.last_attn_weight: torch.Tensor | None = None
-
-    def __enter__(self) -> "_AttentionScoreRecorder":
-        self._original_fn = tabdpt_model._scaled_dot_product_attention_with_attention_scores
-
-        def _wrapped(*args, **kwargs):
-            attn_logit, attn_weight, attn_out = self._original_fn(*args, **kwargs)
-            self.last_attn_weight = attn_weight.detach()
-            return attn_logit, attn_weight, attn_out
-
-        tabdpt_model._scaled_dot_product_attention_with_attention_scores = _wrapped
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> None:
-        if self._original_fn is not None:
-            tabdpt_model._scaled_dot_product_attention_with_attention_scores = self._original_fn
-
-
-def _rolling_predict_values(
-    reg: TabDPTRegressor,
-    *,
-    X_context_proc: np.ndarray,
-    y_context: np.ndarray,
-    text_context: np.ndarray,
-    X_eval_proc: np.ndarray,
-    y_eval: np.ndarray,
-    text_eval: np.ndarray,
-    max_context: int | None,
-    use_text: bool,
-) -> np.ndarray:
-    """Return rolling predictions using the same logic as eval metrics."""
-    reg.model.eval()
-    preds = np.zeros(len(y_eval), dtype=np.float32)
-    with torch.no_grad():
-        for idx in range(len(y_eval)):
-            X_train_full = np.concatenate((X_context_proc, X_eval_proc[:idx]))
-            y_train_full = np.concatenate((y_context, y_eval[:idx]))
-            if use_text:
-                text_train_full = np.concatenate((text_context, text_eval[:idx]), axis=0)
-
-            if max_context is not None:
-                X_train_step = X_train_full[-max_context:]
-                y_train_step = y_train_full[-max_context:]
-                if use_text:
-                    text_train_step = text_train_full[-max_context:]
-            else:
-                X_train_step = X_train_full
-                y_train_step = y_train_full
-                if use_text:
-                    text_train_step = text_train_full
-
-            X_test_step = X_eval_proc[idx:idx + 1]
-            if use_text:
-                train_text_batch = text_train_step[None, ...]
-                test_text_batch = text_eval[idx:idx + 1][None, ...]
-                text_enhanced_attn_weight = reg._compute_attn_weight_pairwise_avg(
-                    train_text_batch,
-                    test_text_batch,
-                )
-            else:
-                text_enhanced_attn_weight = None
-
-            X_train_tensor = torch.tensor(X_train_step, dtype=torch.float32, device=reg.device).unsqueeze(0)
-            X_train_tensor = pad_x(X_train_tensor, reg.max_features)
-            X_test_tensor = torch.tensor(X_test_step, dtype=torch.float32, device=reg.device).unsqueeze(0)
-            X_test_tensor = pad_x(X_test_tensor, reg.max_features)
-            y_context_tensor = torch.tensor(y_train_step, dtype=torch.float32, device=reg.device).unsqueeze(0)
-
-            pred = reg.model(
-                x_src=torch.cat([X_train_tensor, X_test_tensor], dim=1),
-                y_src=y_context_tensor.unsqueeze(-1),
-                task="reg",
-                text_enhanced_attn_weight=text_enhanced_attn_weight,
-            )
-            preds[idx] = pred.squeeze(-1).reshape(-1).detach().cpu().numpy()[0]
-    return preds
-
-
-def _rolling_largest_attn_regular_vs_blended(
-    reg: TabDPTRegressor,
-    *,
-    X_context_proc: np.ndarray,
-    y_context: np.ndarray,
-    text_context: np.ndarray,
-    X_eval_proc: np.ndarray,
-    y_eval: np.ndarray,
-    text_eval: np.ndarray,
-    max_context: int | None,
-    ) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Return the largest regular and blended last-layer attention weights per eval row.
-
-    The regular attention weight comes from the model's raw last-layer attention before text
-    mixing. The blended attention weight applies the current tuned gate and per-head text
-    transforms on top of that raw attention.
-    """
-    reg.model.eval()
-    largest_attn_regular = np.zeros(len(y_eval), dtype=np.float32)
-    largest_attn_blended = np.zeros(len(y_eval), dtype=np.float32)
-    last_block = reg.model.transformer_encoder[-1]
-    gate = get_last_layer_gate_param(reg)
-    with _AttentionScoreRecorder() as recorder:
-        with torch.no_grad():
-            for idx in range(len(y_eval)):
-                X_train_full = np.concatenate((X_context_proc, X_eval_proc[:idx]))
-                y_train_full = np.concatenate((y_context, y_eval[:idx]))
-                text_train_full = np.concatenate((text_context, text_eval[:idx]), axis=0)
-
-                if max_context is not None:
-                    X_train_step = X_train_full[-max_context:]
-                    y_train_step = y_train_full[-max_context:]
-                    text_train_step = text_train_full[-max_context:]
-                else:
-                    X_train_step = X_train_full
-                    y_train_step = y_train_full
-                    text_train_step = text_train_full
-
-                X_test_step = X_eval_proc[idx:idx + 1]
-                train_text_batch = text_train_step[None, ...]
-                test_text_batch = text_eval[idx:idx + 1][None, ...]
-                text_enhanced_attn_weight = reg._compute_attn_weight_pairwise_avg(
-                    train_text_batch,
-                    test_text_batch,
-                )
-
-                X_train_tensor = torch.tensor(X_train_step, dtype=torch.float32, device=reg.device).unsqueeze(0)
-                X_train_tensor = pad_x(X_train_tensor, reg.max_features)
-                X_test_tensor = torch.tensor(X_test_step, dtype=torch.float32, device=reg.device).unsqueeze(0)
-                X_test_tensor = pad_x(X_test_tensor, reg.max_features)
-                y_context_tensor = torch.tensor(y_train_step, dtype=torch.float32, device=reg.device).unsqueeze(0)
-
-                reg.model(
-                    x_src=torch.cat([X_train_tensor, X_test_tensor], dim=1),
-                    y_src=y_context_tensor.unsqueeze(-1),
-                    task="reg",
-                    text_enhanced_attn_weight=text_enhanced_attn_weight,
-                )
-
-                if recorder.last_attn_weight is None:
-                    raise RuntimeError("Failed to capture attention weights during eval plotting.")
-                eval_pos = len(y_train_step)
-                raw_test = recorder.last_attn_weight[:, :, eval_pos:, :]
-                largest_attn_regular[idx] = float(raw_test.max().detach().cpu().item())
-
-                ext_test = text_enhanced_attn_weight[:, eval_pos:, :].unsqueeze(1).repeat(
-                    1, raw_test.shape[1], 1, 1
-                )
-                head_logits = []
-                for head_idx, proj in enumerate(last_block.text_attn_linears):
-                    head_logit = ext_test[:, head_idx:head_idx + 1, :, :]
-                    head_logit = proj(head_logit.unsqueeze(-1)).squeeze(-1)
-                    head_logits.append(head_logit)
-                ext_logits = torch.cat(head_logits, dim=1)
-                ext_weights = torch.softmax(ext_logits, dim=-1)
-
-                gate_prob = torch.sigmoid(gate.detach()).view(1, raw_test.shape[1], 1, 1)
-                mixed_test = raw_test * gate_prob + (1 - gate_prob) * ext_weights
-                largest_attn_blended[idx] = float(mixed_test.max().detach().cpu().item())
-
-    return largest_attn_regular, largest_attn_blended
-
-
-def _plot_eval_mae_curves(
-    *,
-    abs_error_regular: np.ndarray,
-    abs_error_blended: np.ndarray,
-    output_path: Path,
-) -> None:
-    if plt is None:
-        print("Matplotlib unavailable. Skipping eval MAE plot.")
-        return
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    idx = np.arange(1, len(abs_error_regular) + 1, dtype=np.float32)
-    mae_regular = np.cumsum(abs_error_regular) / idx
-    mae_blended = np.cumsum(abs_error_blended) / idx
-    plt.figure(figsize=(12, 5))
-    plt.plot(mae_blended, label="fine-tuned text attention", linewidth=1.4, color="tab:orange", alpha=0.9)
-    plt.plot(mae_regular, label="reg attention", linewidth=1.6, linestyle="--", color="tab:blue")
-    plt.title("Eval Cumulative MAE")
-    plt.xlabel("Eval Index")
-    plt.ylabel("MAE")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(output_path)
-    plt.close()
-
-
-def _plot_eval_mae_delta(
-    *,
-    abs_error_regular: np.ndarray,
-    abs_error_blended: np.ndarray,
-    output_path: Path,
-) -> None:
-    if plt is None:
-        print("Matplotlib unavailable. Skipping eval MAE-delta plot.")
-        return
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    idx = np.arange(1, len(abs_error_regular) + 1, dtype=np.float32)
-    mae_regular = np.cumsum(abs_error_regular) / idx
-    mae_blended = np.cumsum(abs_error_blended) / idx
-    mae_delta = mae_blended - mae_regular
-    plt.figure(figsize=(12, 5))
-    plt.plot(mae_delta, label="MAE_fine_tuned - MAE_reg", linewidth=1.4, color="tab:red")
-    plt.axhline(0.0, color="black", linewidth=1.0, linestyle="--")
-    plt.title("Eval Cumulative MAE Delta")
-    plt.xlabel("Eval Index")
-    plt.ylabel("MAE Delta")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(output_path)
-    plt.close()
-
-
-def _plot_eval_pointwise_mae(
-    *,
-    abs_error_regular: np.ndarray,
-    abs_error_blended: np.ndarray,
-    output_path: Path,
-) -> None:
-    if plt is None:
-        print("Matplotlib unavailable. Skipping eval pointwise-MAE plot.")
-        return
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    plt.figure(figsize=(12, 5))
-    plt.plot(
-        abs_error_blended,
-        label="fine-tuned text attention",
-        linewidth=1.4,
-        color="tab:orange",
-        alpha=0.9,
-    )
-    plt.plot(
-        abs_error_regular,
-        label="reg attention",
-        linewidth=1.6,
-        linestyle="--",
-        color="tab:blue",
-    )
-    plt.title("Eval Pointwise Absolute Error")
-    plt.xlabel("Eval Index")
-    plt.ylabel("|y - pred|")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(output_path)
-    plt.close()
-
-
-def _plot_eval_largest_attn(
-    *,
-    largest_attn_regular: np.ndarray,
-    largest_attn_blended: np.ndarray,
-    output_path: Path,
-) -> None:
-    if plt is None:
-        print("Matplotlib unavailable. Skipping eval largest-attention plot.")
-        return
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    plt.figure(figsize=(12, 5))
-    plt.plot(largest_attn_blended, label="blended attention", linewidth=1.4, color="tab:orange", alpha=0.9)
-    plt.plot(largest_attn_regular, label="reg attention", linewidth=1.6, linestyle="--", color="tab:blue")
-    plt.title("Largest Attention Weight per Eval Index")
-    plt.xlabel("Eval Index")
-    plt.ylabel("Largest Attention Weight")
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(output_path)
-    plt.close()
-
-
-def plot_eval_regular_vs_tuned_text(
-    reg: TabDPTRegressor,
-    *,
-    X_context_proc: np.ndarray,
-    y_context: np.ndarray,
-    text_context: np.ndarray,
-    X_eval_proc: np.ndarray,
-    y_eval: np.ndarray,
-    text_eval: np.ndarray,
-    max_context: int | None,
-    output_dir: Path,
-) -> None:
-    preds_regular = _rolling_predict_values(
-        reg,
-        X_context_proc=X_context_proc,
-        y_context=y_context,
-        text_context=text_context,
-        X_eval_proc=X_eval_proc,
-        y_eval=y_eval,
-        text_eval=text_eval,
-        max_context=max_context,
-        use_text=False,
-    )
-    preds_blended = _rolling_predict_values(
-        reg,
-        X_context_proc=X_context_proc,
-        y_context=y_context,
-        text_context=text_context,
-        X_eval_proc=X_eval_proc,
-        y_eval=y_eval,
-        text_eval=text_eval,
-        max_context=max_context,
-        use_text=True,
-    )
-    largest_attn_regular, largest_attn_blended = _rolling_largest_attn_regular_vs_blended(
-        reg,
-        X_context_proc=X_context_proc,
-        y_context=y_context,
-        text_context=text_context,
-        X_eval_proc=X_eval_proc,
-        y_eval=y_eval,
-        text_eval=text_eval,
-        max_context=max_context,
-    )
-
-    abs_error_regular = np.abs(y_eval - preds_regular)
-    abs_error_blended = np.abs(y_eval - preds_blended)
-
-    mae_plot_path = output_dir / "eval_mae_reg_vs_tuned_text.png"
-    pointwise_mae_plot_path = output_dir / "eval_pointwise_mae_reg_vs_tuned_text.png"
-    mae_delta_plot_path = output_dir / "eval_mae_tuned_minus_reg.png"
-    largest_attn_plot_path = output_dir / "eval_largest_attn_reg_vs_blended.png"
-    _plot_eval_mae_curves(
-        abs_error_regular=abs_error_regular,
-        abs_error_blended=abs_error_blended,
-        output_path=mae_plot_path,
-    )
-    _plot_eval_pointwise_mae(
-        abs_error_regular=abs_error_regular,
-        abs_error_blended=abs_error_blended,
-        output_path=pointwise_mae_plot_path,
-    )
-    _plot_eval_mae_delta(
-        abs_error_regular=abs_error_regular,
-        abs_error_blended=abs_error_blended,
-        output_path=mae_delta_plot_path,
-    )
-    _plot_eval_largest_attn(
-        largest_attn_regular=largest_attn_regular,
-        largest_attn_blended=largest_attn_blended,
-        output_path=largest_attn_plot_path,
-    )
-    print(f"Saved eval MAE plot to {mae_plot_path}")
-    print(f"Saved eval pointwise-MAE plot to {pointwise_mae_plot_path}")
-    print(f"Saved eval MAE-delta plot to {mae_delta_plot_path}")
-    print(f"Saved eval largest-attention plot to {largest_attn_plot_path}")
-
-
-def predict_one_point_with_context(
-    reg: TabDPTRegressor,
-    *,
-    X_context_proc: np.ndarray,
-    y_context: np.ndarray,
-    text_context: np.ndarray,
-    X_eval_row_proc: np.ndarray,
-    text_eval_row: np.ndarray,
-    max_context: int | None,
-) -> torch.Tensor:
-    """Predict one row from a provided rolling context."""
-    if max_context is not None:
-        X_context_step = X_context_proc[-max_context:]
-        y_context_step = y_context[-max_context:]
-        text_context_step = text_context[-max_context:]
-    else:
-        X_context_step = X_context_proc
-        y_context_step = y_context
-        text_context_step = text_context
-
-    train_text_batch = text_context_step[None, ...]
-    test_text_batch = text_eval_row[None, ...]
-    attn_weight_external = reg._compute_attn_weight_pairwise_avg(train_text_batch, test_text_batch)
-
-    X_train_tensor = torch.tensor(X_context_step, dtype=torch.float32, device=reg.device).unsqueeze(0)
-    X_train_tensor = pad_x(X_train_tensor, reg.max_features)
-    X_test_tensor = torch.tensor(X_eval_row_proc, dtype=torch.float32, device=reg.device).unsqueeze(0)
-    X_test_tensor = pad_x(X_test_tensor, reg.max_features)
-    y_context_tensor = torch.tensor(y_context_step, dtype=torch.float32, device=reg.device).unsqueeze(0)
-
-    pred = reg.model(
-        x_src=torch.cat([X_train_tensor, X_test_tensor], dim=1),
-        y_src=y_context_tensor.unsqueeze(-1),
-        task="reg",
-        text_enhanced_attn_weight=attn_weight_external,
-    )
-    return pred.squeeze(-1).reshape(-1)
-
-
 # -----------------------------
 # Step 6) Fine-tuning loop (calls reg.model directly)
 # Rolling window: at step i, train on context + tune[0:i], predict tune[i].
@@ -709,11 +271,10 @@ def fine_tune_external_gate(
     X_context_proc: np.ndarray,
     y_context: np.ndarray,
     text_context: np.ndarray,
-    X_tune: np.ndarray,
     X_tune_proc: np.ndarray,
     y_tune: np.ndarray,
     text_tune: np.ndarray,
-    X_eval: np.ndarray | None = None,
+    tuning_cfg: TuningConfig,
     X_eval_proc: np.ndarray | None = None,
     y_eval: np.ndarray | None = None,
     text_eval: np.ndarray | None = None,
@@ -732,29 +293,25 @@ def fine_tune_external_gate(
     - Within the batch, each row is predicted from base context plus earlier batch rows
     - Gradients are accumulated point-by-point and averaged over the batch
     """
-    # (1) Select tunable params (gate only) and build optimizer.
     gate, tunable_params = freeze_all_but_last_gate(reg)
-    # Use Schedule-Free AdamW when available; fall back to AdamW otherwise.
     if schedulefree is None:
         print("WARNING: `schedulefree` not installed; falling back to torch.optim.AdamW.")
-        optimizer = torch.optim.AdamW(tunable_params, lr=GATE_LR, weight_decay=0.0)
+        optimizer = torch.optim.AdamW(tunable_params, lr=tuning_cfg.gate_lr, weight_decay=0.0)
     else:
-        # optimizer = schedulefree.AdamWScheduleFree(model.parameters(), lr=lr, weight_decay=0.0)
-        optimizer = schedulefree.AdamWScheduleFree(tunable_params, lr=GATE_LR, weight_decay=0.0)
+        optimizer = schedulefree.AdamWScheduleFree(tunable_params, lr=tuning_cfg.gate_lr, weight_decay=0.0)
     print("Tuning last-layer text-mixing params")
 
-    # (3) Rolling-window gradient loop (with base context then growing window)
     reg.model.eval()
     if hasattr(optimizer, "train"):
         optimizer.train()
 
-    num_steps = int(np.ceil(len(y_tune) / TUNE_BATCH_SIZE))
-    for epoch in range(1, EPOCHS + 1):
+    num_steps = int(np.ceil(len(y_tune) / tuning_cfg.tune_batch_size))
+    for epoch in range(1, tuning_cfg.epochs + 1):
         for step_idx in range(num_steps):
             optimizer.zero_grad()
 
-            start = step_idx * TUNE_BATCH_SIZE
-            end = min(len(y_tune), start + TUNE_BATCH_SIZE)
+            start = step_idx * tuning_cfg.tune_batch_size
+            end = min(len(y_tune), start + tuning_cfg.tune_batch_size)
 
             current_batch_size = end - start
             preds_for_log: list[torch.Tensor] = []
@@ -763,16 +320,35 @@ def fine_tune_external_gate(
                 X_point_context = np.concatenate((X_context_proc, X_tune_proc[:point_idx]))
                 y_point_context = np.concatenate((y_context, y_tune[:point_idx]))
                 text_point_context = np.concatenate((text_context, text_tune[:point_idx]), axis=0)
+                if tuning_cfg.max_context_for_tune is not None:
+                    X_context_step = X_point_context[-tuning_cfg.max_context_for_tune:]
+                    y_context_step = y_point_context[-tuning_cfg.max_context_for_tune:]
+                    text_context_step = text_point_context[-tuning_cfg.max_context_for_tune:]
+                else:
+                    X_context_step = X_point_context
+                    y_context_step = y_point_context
+                    text_context_step = text_point_context
 
-                pred_point = predict_one_point_with_context(
-                    reg,
-                    X_context_proc=X_point_context,
-                    y_context=y_point_context,
-                    text_context=text_point_context,
-                    X_eval_row_proc=X_tune_proc[point_idx:point_idx + 1],
-                    text_eval_row=text_tune[point_idx:point_idx + 1],
-                    max_context=MAX_CONTEXT_FOR_TUNE,
-                )
+                train_text_batch = text_context_step[None, ...]
+                test_text_batch = text_tune[point_idx:point_idx + 1][None, ...]
+                attn_weight_external = reg._compute_attn_weight_pairwise_avg(train_text_batch, test_text_batch)
+
+                X_train_tensor = torch.tensor(X_context_step, dtype=torch.float32, device=reg.device).unsqueeze(0)
+                X_train_tensor = pad_x(X_train_tensor, reg.max_features)
+                X_test_tensor = torch.tensor(
+                    X_tune_proc[point_idx:point_idx + 1],
+                    dtype=torch.float32,
+                    device=reg.device,
+                ).unsqueeze(0)
+                X_test_tensor = pad_x(X_test_tensor, reg.max_features)
+                y_context_tensor = torch.tensor(y_context_step, dtype=torch.float32, device=reg.device).unsqueeze(0)
+
+                pred_point = reg.model(
+                    x_src=torch.cat([X_train_tensor, X_test_tensor], dim=1),
+                    y_src=y_context_tensor.unsqueeze(-1),
+                    task="reg",
+                    text_enhanced_attn_weight=attn_weight_external,
+                ).squeeze(-1).reshape(-1)
                 preds_for_log.append(pred_point.detach())
 
                 y_point_target = torch.tensor(
@@ -783,21 +359,20 @@ def fine_tune_external_gate(
                 point_loss = torch.nn.functional.mse_loss(pred_point, y_point_target)
                 (point_loss / current_batch_size).backward()
 
-            if GATE_REG_STRENGTH and GATE_REG_STRENGTH > 0:
+            if tuning_cfg.gate_reg_strength > 0:
                 gate_prob = torch.sigmoid(gate)
                 gate_reg = (gate_prob * (1 - gate_prob)).mean()
-                (GATE_REG_STRENGTH * gate_reg).backward()
+                (tuning_cfg.gate_reg_strength * gate_reg).backward()
 
             preds = torch.cat(preds_for_log, dim=0)
             y_target = torch.tensor(y_tune[start:end], dtype=torch.float32, device=reg.device)
             optimizer.step()
 
-            # Optional stability clamp in logit space (NOT in [0,1] space).
-            if GATE_LOGIT_CLAMP is not None:
+            if tuning_cfg.gate_logit_clamp is not None:
                 with torch.no_grad():
-                    gate.clamp_(-GATE_LOGIT_CLAMP, GATE_LOGIT_CLAMP)
+                    gate.clamp_(-tuning_cfg.gate_logit_clamp, tuning_cfg.gate_logit_clamp)
 
-            if (step_idx + 1) % STEP_LOG_EVERY == 0 or (step_idx == num_steps - 1):
+            if (step_idx + 1) % tuning_cfg.step_log_every == 0 or step_idx == num_steps - 1:
                 preds_np = preds.detach().cpu().numpy()
                 mse = mean_squared_error(y_target.detach().cpu().numpy(), preds_np)
                 rmse = float(np.sqrt(mse))
@@ -810,9 +385,9 @@ def fine_tune_external_gate(
             f"Epoch {epoch:02d} text-mixing params | "
             f"gate: {gate_stats(gate)} | {linear_stats(reg)}"
         )
-        if EVAL_EACH_EPOCH:
-            if X_eval is None or X_eval_proc is None or y_eval is None or text_eval is None:
-                raise ValueError("EVAL_EACH_EPOCH requires X_eval, X_eval_proc, y_eval, and text_eval.")
+        if tuning_cfg.eval_each_epoch:
+            if X_eval_proc is None or y_eval is None or text_eval is None:
+                raise ValueError("EVAL_EACH_EPOCH requires X_eval_proc, y_eval, and text_eval.")
             print(f"\n== Eval after epoch {epoch:02d} ==")
             evaluate_rolling(
                 reg,
@@ -824,7 +399,7 @@ def fine_tune_external_gate(
                 text_eval=text_tune,
                 use_text=False,
                 label="Tune (no text attn)",
-                max_context=MAX_CONTEXT_FOR_TUNE_EVAL,
+                max_context=tuning_cfg.max_context_for_tune_eval,
             )
             evaluate_rolling(
                 reg,
@@ -836,7 +411,7 @@ def fine_tune_external_gate(
                 text_eval=text_tune,
                 use_text=True,
                 label="Tune (with text attn)",
-                max_context=MAX_CONTEXT_FOR_TUNE_EVAL,
+                max_context=tuning_cfg.max_context_for_tune_eval,
             )
             eval_context_proc = np.concatenate((X_context_proc, X_tune_proc))
             eval_y_context = np.concatenate((y_context, y_tune))
@@ -851,7 +426,7 @@ def fine_tune_external_gate(
                 text_eval=text_eval,
                 use_text=False,
                 label="Eval (no text attn)",
-                max_context=MAX_CONTEXT_FOR_EVAL,
+                max_context=tuning_cfg.max_context_for_eval,
             )
             evaluate_rolling(
                 reg,
@@ -863,50 +438,42 @@ def fine_tune_external_gate(
                 text_eval=text_eval,
                 use_text=True,
                 label="Eval (with text attn)",
-                max_context=MAX_CONTEXT_FOR_EVAL,
+                max_context=tuning_cfg.max_context_for_eval,
             )
 
-    # (4) Freeze again to avoid surprises if you re-use `reg` later.
     for p in reg.model.parameters():
         p.requires_grad_(False)
 
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fine-tune alpha gate on a configured dataset.")
-    parser.add_argument("--dataset", default=DEFAULT_DATASET, help="Dataset key in the config file.")
-    parser.add_argument("--config", default=DATASET_CONFIG_PATH, help="Path to dataset config YAML.")
+    parser.add_argument("--dataset", help="Dataset key in the config file.")
+    parser.add_argument("--config", required=True, help="Path to dataset config YAML.")
     args = parser.parse_args()
 
-    dataset_cfg = load_dataset_config(args.config, args.dataset)
-    data_path = dataset_cfg.get("data_path", DATA_PATH)
-    date_column = dataset_cfg.get("date_column", DATE_COLUMN)
-    numeric_features = dataset_cfg.get("numeric_features", NUMERIC_FEATURES)
-    target_column = dataset_cfg.get("target_column", TARGET_COLUMN)
-    embedding_columns = dataset_cfg.get("embedding_columns", EMBEDDING_COLUMNS)
-    embedding_lags = dataset_cfg.get("embedding_lags", TEXT_EMBEDDING_LAGS)
-    embedding_column_template = dataset_cfg.get("embedding_column_template", EMBEDDING_COLUMN_TEMPLATE)
+    run_cfg = load_fine_tune_config(args.config, args.dataset)
+    torch.manual_seed(run_cfg.seed)
+    np.random.seed(run_cfg.seed)
 
     if args.dataset:
         print(f"Using dataset '{args.dataset}' from {args.config}")
     else:
         print(f"Using dataset config {args.config}")
 
-    # Step 1: load the dataset
-    X, y, text = load_climate_dataset(
-        path=data_path,
-        date_column=date_column,
-        numeric_features=numeric_features,
-        target_column=target_column,
-        embedding_lags=embedding_lags,
-        embedding_columns=embedding_columns,
-        embedding_column_template=embedding_column_template,
-        max_rows=MAX_ROWS,
+    X, y, text = load_tabular_text_dataset(
+        path=run_cfg.data_path,
+        date_column=run_cfg.date_column,
+        numeric_features=run_cfg.numeric_features,
+        target_column=run_cfg.target_column,
+        embedding_lags=run_cfg.embedding_lags,
+        embedding_columns=run_cfg.embedding_columns,
+        embedding_column_template=run_cfg.embedding_column_template,
+        max_rows=run_cfg.max_rows,
     )
     if X.shape[1] == 0:
-        # TabDPT expects at least one numeric feature; use a constant placeholder.
         X = np.zeros((X.shape[0], 1), dtype=np.float32)
 
-    # Step 2: split chronologically
     (
         X_context,
         y_context,
@@ -921,17 +488,21 @@ def main() -> None:
         X,
         y,
         text,
-        context_ratio=CONTEXT_RATIO,
-        tune_ratio=TUNE_RATIO,
-        eval_ratio=EVAL_RATIO,
+        context_ratio=run_cfg.context_ratio,
+        tune_ratio=run_cfg.tune_ratio,
+        eval_ratio=run_cfg.eval_ratio,
     )
     print(f"Split sizes: context={len(y_context)} tune={len(y_tune)} eval={len(y_eval)}")
 
-    # Step 3: initialize regressor + store context set
-    reg = load_tabdpt_regressor(device=DEVICE, model_weight_path=MODEL_WEIGHT_PATH, text_enhanced=True)
+    reg = load_tabdpt_regressor(
+        device=run_cfg.model.device,
+        model_weight_path=run_cfg.model.model_weight_path,
+        text_enhanced=run_cfg.model.text_enhanced,
+        use_flash=run_cfg.model.use_flash,
+        compile_model=run_cfg.model.compile_model,
+    )
     reg.fit(X_context, y_context, text_context)
 
-    # Feature reduction disabled; features are assumed to fit reg.max_features.
     reduction_mode = None
     reduction_payload = None
     X_context_proc = preprocess_features(
@@ -953,7 +524,6 @@ def main() -> None:
         reduction_payload=reduction_payload,
     )
 
-    # Step 4: baseline eval
     print("\n== Baseline (before tuning) ==")
     baseline_no_text_tune = evaluate_rolling(
         reg,
@@ -965,19 +535,7 @@ def main() -> None:
         text_eval=text_tune,
         use_text=False,
         label="Tune (no text attn)",
-        max_context=MAX_CONTEXT_FOR_TUNE_EVAL,
-    )
-    baseline_text_tune = evaluate_rolling(
-        reg,
-        X_context_proc=X_context_proc,
-        y_context=y_context,
-        text_context=text_context,
-        X_eval_proc=X_tune_proc,
-        y_eval=y_tune,
-        text_eval=text_tune,
-        use_text=True,
-        label="Tune (with text attn)",
-        max_context=MAX_CONTEXT_FOR_TUNE_EVAL,
+        max_context=run_cfg.tuning.max_context_for_tune_eval,
     )
     eval_context_proc = np.concatenate((X_context_proc, X_tune_proc))
     eval_y_context = np.concatenate((y_context, y_tune))
@@ -992,7 +550,7 @@ def main() -> None:
         text_eval=text_eval,
         use_text=False,
         label="Eval (no text attn)",
-        max_context=MAX_CONTEXT_FOR_EVAL,
+        max_context=run_cfg.tuning.max_context_for_eval,
     )
     baseline_text_eval = evaluate_rolling(
         reg,
@@ -1004,9 +562,9 @@ def main() -> None:
         text_eval=text_eval,
         use_text=True,
         label="Eval (with text attn)",
-        max_context=MAX_CONTEXT_FOR_EVAL,
+        max_context=run_cfg.tuning.max_context_for_eval,
     )
-    if DEBUG_TEXT_EFFECT:
+    if run_cfg.tuning.debug_text_effect:
         delta_mae = baseline_text_eval[0] - baseline_no_text_eval[0]
         delta_rmse = baseline_text_eval[1] - baseline_no_text_eval[1]
         delta_mape = baseline_text_eval[2] - baseline_no_text_eval[2]
@@ -1016,26 +574,23 @@ def main() -> None:
         )
     print("Initial text-mixing gate:", gate_stats(get_last_layer_gate_param(reg)))
 
-    # Step 5: fine-tune gate on tune split
     print("\n== Fine-tuning text-mixing parameters ==")
     fine_tune_external_gate(
         reg,
         X_context_proc=X_context_proc,
         y_context=y_context,
         text_context=text_context,
-        X_tune=X_tune,
         X_tune_proc=X_tune_proc,
         y_tune=y_tune,
         text_tune=text_tune,
-        X_eval=X_eval,
+        tuning_cfg=run_cfg.tuning,
         X_eval_proc=X_eval_proc,
         y_eval=y_eval,
         text_eval=text_eval,
     )
 
-    # Step 6: eval after tuning
     print("\n== After tuning ==")
-    if FREEZE_NO_TEXT_BASELINE:
+    if run_cfg.tuning.freeze_no_text_baseline:
         _format_metrics("Tune (no text attn)", *baseline_no_text_tune)
         _format_metrics("Eval (no text attn)", *baseline_no_text_eval)
         tuned_no_text_eval = baseline_no_text_eval
@@ -1050,7 +605,7 @@ def main() -> None:
             text_eval=text_tune,
             use_text=False,
             label="Tune (no text attn)",
-            max_context=MAX_CONTEXT_FOR_TUNE_EVAL,
+            max_context=run_cfg.tuning.max_context_for_tune_eval,
         )
         tuned_no_text_eval = evaluate_rolling(
             reg,
@@ -1062,7 +617,7 @@ def main() -> None:
             text_eval=text_eval,
             use_text=False,
             label="Eval (no text attn)",
-            max_context=MAX_CONTEXT_FOR_EVAL,
+            max_context=run_cfg.tuning.max_context_for_eval,
         )
     evaluate_rolling(
         reg,
@@ -1074,7 +629,7 @@ def main() -> None:
         text_eval=text_tune,
         use_text=True,
         label="Tune (with text attn)",
-        max_context=MAX_CONTEXT_FOR_TUNE_EVAL,
+        max_context=run_cfg.tuning.max_context_for_tune_eval,
     )
     tuned_text_eval = evaluate_rolling(
         reg,
@@ -1086,9 +641,9 @@ def main() -> None:
         text_eval=text_eval,
         use_text=True,
         label="Eval (with text attn)",
-        max_context=MAX_CONTEXT_FOR_EVAL,
+        max_context=run_cfg.tuning.max_context_for_eval,
     )
-    if DEBUG_TEXT_EFFECT:
+    if run_cfg.tuning.debug_text_effect:
         delta_mae = tuned_text_eval[0] - tuned_no_text_eval[0]
         delta_rmse = tuned_text_eval[1] - tuned_no_text_eval[1]
         delta_mape = tuned_text_eval[2] - tuned_no_text_eval[2]
@@ -1097,25 +652,6 @@ def main() -> None:
             f"ΔRMSE={delta_rmse:.6f} | ΔMAPE={delta_mape:.6f}%"
         )
     print("Tuned text-mixing gate:", gate_stats(get_last_layer_gate_param(reg)))
-
-    plot_dir = PLOT_OUTPUT_ROOT / (args.dataset or Path(data_path).stem)
-    plot_eval_regular_vs_tuned_text(
-        reg,
-        X_context_proc=eval_context_proc,
-        y_context=eval_y_context,
-        text_context=eval_text_context,
-        X_eval_proc=X_eval_proc,
-        y_eval=y_eval,
-        text_eval=text_eval,
-        max_context=MAX_CONTEXT_FOR_EVAL,
-        output_dir=plot_dir,
-    )
-
-    print("\n== Baseline (before tuning) ==")
-    _format_metrics("Tune (no text attn)", *baseline_no_text_tune)
-    _format_metrics("Eval (no text attn)", *baseline_no_text_eval)
-    _format_metrics("Tune (with text attn)", *baseline_text_tune)
-    _format_metrics("Eval (with text attn)", *baseline_text_eval)
 
 
 if __name__ == "__main__":
