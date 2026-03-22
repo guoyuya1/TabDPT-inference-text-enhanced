@@ -58,7 +58,7 @@ except ImportError:
     OmegaConf = _OmegaConfCompat
 
 from eval_fine_tune import _format_metrics, evaluate_rolling
-from load_dataset import load_climate_dataset
+from load_dataset import load_tabular_text_dataset
 from split_ts import time_split
 
 
@@ -509,7 +509,7 @@ def main() -> None:
         print(f"Using dataset config {args.config}")
 
     # Step 1: load the dataset
-    X, y, text = load_climate_dataset(
+    X, y, text = load_tabular_text_dataset(
         path=data_path,
         date_column=date_column,
         numeric_features=numeric_features,

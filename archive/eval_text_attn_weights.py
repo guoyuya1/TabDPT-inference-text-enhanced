@@ -16,7 +16,7 @@ from fine_tune_dpt import (
     load_tabdpt_regressor,
     preprocess_features,
 )
-from load_dataset import load_climate_dataset
+from load_dataset import load_tabular_text_dataset
 from split_ts import time_split
 
 
@@ -107,7 +107,7 @@ def _slice_eval_range(
 
 
 def main() -> None:
-    X, y, text = load_climate_dataset(
+    X, y, text = load_tabular_text_dataset(
         path=DATA_PATH,
         date_column=DATE_COLUMN,
         numeric_features=NUMERIC_FEATURES,
@@ -139,7 +139,13 @@ def main() -> None:
         eval_ratio=EVAL_RATIO,
     )
 
-    reg = load_tabdpt_regressor(device=DEVICE, model_weight_path=MODEL_WEIGHT_PATH, text_enhanced=True)
+    reg = load_tabdpt_regressor(
+        device=DEVICE,
+        model_weight_path=MODEL_WEIGHT_PATH,
+        text_enhanced=True,
+        use_flash=True,
+        compile_model=True,
+    )
     reg.fit(X_context, y_context, text_context)
 
     reduction_mode = None

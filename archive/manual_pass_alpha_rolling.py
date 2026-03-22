@@ -26,7 +26,7 @@ from fine_tune_dpt import (
     load_tabdpt_regressor,
     preprocess_features,
 )
-from load_dataset import load_climate_dataset
+from load_dataset import load_tabular_text_dataset
 from split_ts import time_split
 from tabdpt.utils import pad_x
 
@@ -331,7 +331,7 @@ def main() -> None:
     else:
         print(f"Using dataset config {args.config}")
 
-    X, y, text = load_climate_dataset(
+    X, y, text = load_tabular_text_dataset(
         path=data_path,
         date_column=date_column,
         numeric_features=numeric_features,
@@ -364,7 +364,13 @@ def main() -> None:
     )
     print(f"Split sizes: context={len(y_context)} tune={len(y_tune)} eval={len(y_eval)}")
 
-    reg = load_tabdpt_regressor(device=DEVICE, model_weight_path=MODEL_WEIGHT_PATH, text_enhanced=True)
+    reg = load_tabdpt_regressor(
+        device=DEVICE,
+        model_weight_path=MODEL_WEIGHT_PATH,
+        text_enhanced=True,
+        use_flash=True,
+        compile_model=True,
+    )
     X_fit = np.concatenate((X_context, X_tune))
     y_fit = np.concatenate((y_context, y_tune))
     text_fit = np.concatenate((text_context, text_tune), axis=0)
