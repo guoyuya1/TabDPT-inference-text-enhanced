@@ -12,7 +12,7 @@ def _parse_embedding_column(series: pd.Series) -> np.ndarray:
     return np.stack(parsed, axis=0)
 
 
-def load_climate_dataset(
+def load_tabular_text_dataset(
     *,
     path: str,
     date_column: str | None,
@@ -62,3 +62,7 @@ def load_climate_dataset(
     by_lag = [_parse_embedding_column(df[col]) for col in embedding_cols]  # list[(N, D)]
     text = np.stack(by_lag, axis=1)  # (N, L, D)
     return X, y, text
+
+
+# Backward-compatible alias for older scripts/notebooks.
+load_climate_dataset = load_tabular_text_dataset
