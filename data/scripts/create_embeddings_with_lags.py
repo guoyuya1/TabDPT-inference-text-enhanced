@@ -21,9 +21,12 @@ from sentence_transformers import SentenceTransformer
 # Fixed configuration (edit here if needed)
 csv_path = "./Time-MMD/numerical/Economy/Economy_with_text.csv"
 text_columns = None  # e.g. ["text"] or ["report_fact", "search_fact"]
+numerical_columns = None  # e.g. ["Open", "Close"]
 date_column = "date"
 model_name = "Qwen/Qwen3-Embedding-8B" # "Qwen/Qwen3-Embedding-0.6B"
 lag_days = 3  # number of prior days to include (in addition to current)
+text_lag_days = None
+numerical_lag_days = None
 batch_size = 16
 max_length = 1024
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -51,6 +54,20 @@ def parse_columns(columns_arg: str | Sequence[str] | None) -> List[str] | None:
 
 def parse_text_columns(text_columns_arg: str | Sequence[str] | None) -> List[str] | None:
     return parse_columns(text_columns_arg)
+
+
+def resolve_numeric_columns(
+    df: pd.DataFrame, requested: Sequence[str] | None
+) -> List[str]:
+    if not requested:
+        return []
+
+    missing = [col for col in requested if col not in df.columns]
+    if missing:
+        raise ValueError(
+            f"Missing numeric columns {missing}. Available columns: {list(df.columns)}"
+        )
+    return list(requested)
 
 
 def load_config(config_path: str | None) -> dict[str, Any]:
@@ -180,8 +197,19 @@ def add_combined_text_column(
     return text_columns
 
 
-def default_output_path(csv_path: Path, lag_days: int) -> Path:
-    output_name = f"{csv_path.stem}_with_embeddings_lag_{lag_days}.csv"
+def default_output_path(
+    csv_path: Path,
+    *,
+    text_lag_days: int,
+    numerical_lag_days: int,
+) -> Path:
+    if text_lag_days == numerical_lag_days:
+        output_name = f"{csv_path.stem}_with_embeddings_lag_{text_lag_days}.csv"
+    else:
+        output_name = (
+            f"{csv_path.stem}_with_embeddings_lag_{text_lag_days}"
+            f"_with_numeric_lag{numerical_lag_days}.csv"
+        )
     parts = list(csv_path.parts)
     if "source_data" in parts:
         idx = parts.index("source_data")
@@ -195,13 +223,20 @@ def render_target_output_path(
     template: str,
     *,
     model_name: str,
-    lag_days: int,
+    text_lag_days: int,
+    numerical_lag_days: int,
 ) -> Path:
     safe_model_name = str(model_name).replace("/", "-")
     rendered = template.format(
         model_name=safe_model_name,
-        lag=lag_days,
-        lag_days=lag_days,
+        lag=text_lag_days,
+        lag_days=text_lag_days,
+        text_lag=text_lag_days,
+        text_lag_days=text_lag_days,
+        numeric_lag=numerical_lag_days,
+        numeric_lag_days=numerical_lag_days,
+        numerical_lag=numerical_lag_days,
+        numerical_lag_days=numerical_lag_days,
     )
     return Path(rendered)
 
@@ -234,12 +269,19 @@ def parse_args(args: Sequence[str] | None = None) -> argparse.Namespace:
         help="Comma-separated list of text columns; auto-detect if omitted.",
     )
     parser.add_argument(
+        "--numerical-columns",
+        default=argparse.SUPPRESS,
+        help="Comma-separated list of numeric columns to create lag features for.",
+    )
+    parser.add_argument(
         "--target-columns",
         default=argparse.SUPPRESS,
         help="Comma-separated list of target columns to validate (optional).",
     )
     parser.add_argument("--date-column", default=argparse.SUPPRESS)
     parser.add_argument("--lag-days", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--text-lag-days", type=int, default=argparse.SUPPRESS)
+    parser.add_argument("--numerical-lag-days", type=int, default=argparse.SUPPRESS)
     parser.add_argument("--target-output-path", default=argparse.SUPPRESS)
     parser.add_argument("--model-name", default=argparse.SUPPRESS)
     parser.add_argument("--batch-size", type=int, default=argparse.SUPPRESS)
@@ -251,13 +293,23 @@ def parse_args(args: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--na-text", default=argparse.SUPPRESS)
     parsed = parser.parse_args(args)
 
+    default_lag_days = config.get("lag_days", lag_days)
     defaults = {
         "config": pre_parsed.config,
         "csv_path": config_source_path or csv_path,
         "text_columns": config.get("text_columns", text_columns),
+        "numerical_columns": config.get("numerical_columns", numerical_columns),
         "target_columns": config.get("target_columns"),
         "date_column": config.get("date_column", date_column),
-        "lag_days": config.get("lag_days", lag_days),
+        "lag_days": default_lag_days,
+        "text_lag_days": config.get(
+            "text_lag_days",
+            text_lag_days if text_lag_days is not None else default_lag_days,
+        ),
+        "numerical_lag_days": config.get(
+            "numerical_lag_days",
+            numerical_lag_days if numerical_lag_days is not None else default_lag_days,
+        ),
         "target_output_path": config_target_output_path or target_output_path,
         "model_name": config.get("model_name", model_name),
         "batch_size": config.get("batch_size", batch_size),
@@ -318,6 +370,9 @@ def main(args: Sequence[str] | None = None) -> None:
     resolved_text_columns = resolve_text_columns(
         df, parse_text_columns(parsed.text_columns)
     )
+    resolved_numerical_columns = resolve_numeric_columns(
+        df, parse_columns(parsed.numerical_columns)
+    )
     resolved_text_columns = add_combined_text_column(
         df,
         resolved_text_columns,
@@ -331,7 +386,7 @@ def main(args: Sequence[str] | None = None) -> None:
     # create lagged text columns.
     lag_text_cols = []
     for text_col in resolved_text_columns:
-        for lag in range(parsed.lag_days + 1):
+        for lag in range(parsed.text_lag_days + 1):
             col_name = f"{text_col}_lag{lag}"
             if lag == 0:
                 df[col_name] = df[text_col]
@@ -341,11 +396,25 @@ def main(args: Sequence[str] | None = None) -> None:
             df[col_name] = sanitize_text_series(df[col_name], parsed.na_text)
             lag_text_cols.append(col_name)
 
+    # create lagged numeric columns.
+    lag_numeric_cols = []
+    for numeric_col in resolved_numerical_columns:
+        for lag in range(1, parsed.numerical_lag_days + 1):
+            col_name = f"{numeric_col}_lag{lag}"
+            df[col_name] = df[numeric_col].shift(lag)
+            lag_numeric_cols.append(col_name)
+
     print(
         f"Loaded {len(df)} rows from {resolved_csv_path} on device {parsed.device} "
-        f"with lags 0..{parsed.lag_days}."
+        f"with text lags 0..{parsed.text_lag_days}."
     )
     print(f"Text columns: {', '.join(resolved_text_columns)}")
+    if resolved_numerical_columns:
+        print(f"Numeric columns: {', '.join(resolved_numerical_columns)}")
+        print(
+            f"Created {len(lag_numeric_cols)} numeric lag columns "
+            f"(lags 1..{parsed.numerical_lag_days})."
+        )
 
     target_devices = None
     if str(parsed.device).startswith("cuda"):
@@ -382,10 +451,15 @@ def main(args: Sequence[str] | None = None) -> None:
         render_target_output_path(
             parsed.target_output_path,
             model_name=parsed.model_name,
-            lag_days=parsed.lag_days,
+            text_lag_days=parsed.text_lag_days,
+            numerical_lag_days=parsed.numerical_lag_days,
         )
         if parsed.target_output_path
-        else default_output_path(resolved_csv_path, parsed.lag_days)
+        else default_output_path(
+            resolved_csv_path,
+            text_lag_days=parsed.text_lag_days,
+            numerical_lag_days=parsed.numerical_lag_days,
+        )
     )
     resolved_output_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(resolved_output_path, index=False)
