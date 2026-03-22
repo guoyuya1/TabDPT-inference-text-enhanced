@@ -5,7 +5,7 @@ uv.lock
 .venv/
 eval_output/
 build/
-
+logs/
 # Generated experiment artifacts
 results/
 
