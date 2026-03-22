@@ -15,7 +15,7 @@ from typing import Any, List, Sequence
 
 import pandas as pd
 import torch
-from omegaconf import OmegaConf
+import yaml
 from sentence_transformers import SentenceTransformer
 
 # Fixed configuration (edit here if needed)
@@ -78,10 +78,10 @@ def load_config(config_path: str | None) -> dict[str, Any]:
     if not path.is_file():
         raise FileNotFoundError(f"Config file not found: {path}")
 
-    config = OmegaConf.load(path)
-    if config is None:
+    with open(path, "r", encoding="utf-8") as f:
+        config_dict = yaml.safe_load(f)
+    if config_dict is None:
         return {}
-    config_dict = OmegaConf.to_container(config, resolve=True)
     if not isinstance(config_dict, dict):
         raise ValueError("Config must be a mapping of keys to values.")
     return config_dict

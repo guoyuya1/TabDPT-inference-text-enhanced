@@ -15,32 +15,24 @@ from .model import TabDPTModel
 from .utils import FAISS, convert_to_torch_tensor, Log1pScaler, generate_random_permutation
 from typing import Union
 
-try:
-    from omegaconf import OmegaConf
-except ImportError:
-    class _AttrDict(dict):
-        def __getattr__(self, item):
-            try:
-                return self[item]
-            except KeyError as exc:
-                raise AttributeError(item) from exc
 
-        def __setattr__(self, key, value):
-            self[key] = value
+class _AttrDict(dict):
+    def __getattr__(self, item):
+        try:
+            return self[item]
+        except KeyError as exc:
+            raise AttributeError(item) from exc
 
-    class _OmegaConfCompat:
-        @staticmethod
-        def create(value):
-            def _to_obj(obj):
-                if isinstance(obj, dict):
-                    return _AttrDict({k: _to_obj(v) for k, v in obj.items()})
-                if isinstance(obj, list):
-                    return [_to_obj(v) for v in obj]
-                return obj
+    def __setattr__(self, key, value):
+        self[key] = value
 
-            return _to_obj(value)
 
-    OmegaConf = _OmegaConfCompat
+def _to_attr_dict(obj):
+    if isinstance(obj, dict):
+        return _AttrDict({k: _to_attr_dict(v) for k, v in obj.items()})
+    if isinstance(obj, list):
+        return [_to_attr_dict(v) for v in obj]
+    return obj
 
 # Constants for model caching and download
 _VERSION = "1_1"
@@ -119,7 +111,7 @@ class TabDPTEstimator(BaseEstimator):
         with safe_open(self.path, framework="pt", device=self.device) as f:
             meta = f.metadata()
             cfg_dict = json.loads(meta["cfg"])
-            cfg = OmegaConf.create(cfg_dict)
+            cfg = _to_attr_dict(cfg_dict)
             model_state = {k: f.get_tensor(k) for k in f.keys()}
 
         cfg.env.device = self.device
