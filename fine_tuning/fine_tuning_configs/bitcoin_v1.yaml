@@ -17,16 +17,12 @@ numeric_features:
 - Adj_Close_lag2
 - Adj_Close_lag3
 target_column: Adj_Close
-text_feature_name: summary_gpt-5-mini
-embedding_lags:
-- 0
-- 1
-- 2
-- 3
+embedding_lags: []
 embedding_columns:
 - embedding_summary_gpt-5-mini_lag1
 - embedding_summary_gpt-5-mini_lag2
 - embedding_summary_gpt-5-mini_lag3
+embedding_column_template: null
 max_rows: 1000
 context_ratio: 0.2
 tune_ratio: 0.65
@@ -41,7 +37,6 @@ tuning:
   max_context_for_tune_eval: 1000
   eval_each_epoch: false
   debug_text_effect: true
-  plot_output_root: results/fine_tune_plots
   step_log_every: 50
 seed: 0
 model:

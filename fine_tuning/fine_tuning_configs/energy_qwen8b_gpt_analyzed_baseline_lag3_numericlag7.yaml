@@ -5,10 +5,12 @@ numeric_features:
 - OT_lag2
 - OT_lag3
 target_column: OT
+embedding_lags: []
 embedding_columns:
 - embedding_search_fact_summary_gpt_5_2_lag1
 - embedding_search_fact_summary_gpt_5_2_lag2
 - embedding_search_fact_summary_gpt_5_2_lag3
+embedding_column_template: null
 seed: 0
 max_rows: 1000
 context_ratio: 0.2
@@ -30,5 +32,4 @@ tuning:
   max_context_for_tune_eval: 1000
   eval_each_epoch: false
   debug_text_effect: true
-  plot_output_root: results/fine_tune_plots
   step_log_every: 50
