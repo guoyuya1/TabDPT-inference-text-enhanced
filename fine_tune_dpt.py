@@ -26,120 +26,20 @@ one per attention head. The forward pass applies `sigmoid()` to obtain values in
 from __future__ import annotations
 
 import argparse
-import os
-from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
+import schedulefree  # type: ignore
 import torch
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
-try:
-    import schedulefree  # type: ignore
-except Exception:  # noqa: BLE001
-    schedulefree = None
-
+from fine_tune_configs import TuningConfig, load_fine_tune_config
 from tabdpt import TabDPTRegressor
 from tabdpt.utils import pad_x
-try:
-    from omegaconf import OmegaConf
-except ImportError:
-    import yaml
-
-    class _OmegaConfCompat:
-        @staticmethod
-        def load(path):
-            with open(Path(path), "r", encoding="utf-8") as f:
-                return yaml.safe_load(f)
-
-        @staticmethod
-        def to_container(value, resolve: bool = True):  # noqa: ARG001
-            return value
-
-    OmegaConf = _OmegaConfCompat
 
 from eval_fine_tune import _format_metrics, evaluate_rolling
 from load_dataset import load_tabular_text_dataset
 from split_ts import time_split
 
-
-# -----------------------------
-# Step 0) Runtime configuration
-# -----------------------------
-@dataclass(frozen=True)
-class ModelConfig:
-    device: str | None
-    model_weight_path: str | None
-    text_enhanced: bool
-    use_flash: bool
-    compile_model: bool
-
-
-@dataclass(frozen=True)
-class TuningConfig:
-    epochs: int
-    gate_lr: float
-    gate_logit_clamp: float | None
-    gate_reg_strength: float
-    tune_batch_size: int
-    max_context_for_tune: int | None
-    max_context_for_eval: int | None
-    max_context_for_tune_eval: int | None
-    eval_each_epoch: bool
-    debug_text_effect: bool
-    freeze_no_text_baseline: bool
-    step_log_every: int
-
-
-@dataclass(frozen=True)
-class DataConfig:
-    data_path: str
-    date_column: str | None
-    numeric_features: list[str]
-    target_column: str
-    embedding_lags: list[int]
-    embedding_columns: list[str] | None
-    embedding_column_template: str | None
-    max_rows: int | None
-    context_ratio: float
-    tune_ratio: float
-    eval_ratio: float
-    seed: int
-    model: ModelConfig
-    tuning: TuningConfig
-
-# -----------------------------
-# Step 1) Data loading utilities
-# -----------------------------
-
-def load_dataset_config(config_path: str, dataset_name: str | None) -> dict:
-    if not os.path.exists(config_path):
-        raise FileNotFoundError(f"Dataset config not found: {config_path}")
-    config = OmegaConf.to_container(OmegaConf.load(config_path), resolve=True)
-    if dataset_name is None:
-        return config
-    return config[dataset_name]
-
-
-def load_fine_tune_config(config_path: str, dataset_name: str | None) -> DataConfig:
-    dataset_cfg = dict(load_dataset_config(config_path, dataset_name))
-    dataset_cfg.setdefault("embedding_lags", [])
-    dataset_cfg.setdefault("embedding_columns", None)
-    dataset_cfg.setdefault("embedding_column_template", None)
-    dataset_cfg["model"] = ModelConfig(**dataset_cfg["model"])
-    dataset_cfg["tuning"] = TuningConfig(
-        **{
-            key: dataset_cfg["tuning"][key]
-            for key in TuningConfig.__dataclass_fields__
-            if key in dataset_cfg["tuning"]
-        }
-    )
-    dataset_cfg = {
-        key: dataset_cfg[key]
-        for key in DataConfig.__dataclass_fields__
-        if key in dataset_cfg
-    }
-    return DataConfig(**dataset_cfg)
 
 def load_tabdpt_regressor(
     *,
@@ -236,8 +136,8 @@ def gate_stats(gate_logits: torch.Tensor) -> str:
     )
 
 
-def linear_stats(reg: TabDPTRegressor) -> str:
-    """Compact one-line summary for last block text linear layer parameters."""
+def get_trainining_info(reg: TabDPTRegressor, gate_logits: torch.Tensor) -> str:
+    """Compact one-line summary for the gate and last block text linear params."""
     last_block = reg.model.transformer_encoder[-1]
     summaries: list[str] = []
     for idx, proj in enumerate(last_block.text_attn_linears):
@@ -258,7 +158,7 @@ def linear_stats(reg: TabDPTRegressor) -> str:
             line += f", b={b_val:.3f}"
         line += ")"
         summaries.append(line)
-    return " ".join(summaries)
+    return f"gate: {gate_stats(gate_logits)} | {' '.join(summaries)}"
 
 
 # -----------------------------
@@ -294,11 +194,8 @@ def fine_tune_external_gate(
     - Gradients are accumulated point-by-point and averaged over the batch
     """
     gate, tunable_params = freeze_all_but_last_gate(reg)
-    if schedulefree is None:
-        print("WARNING: `schedulefree` not installed; falling back to torch.optim.AdamW.")
-        optimizer = torch.optim.AdamW(tunable_params, lr=tuning_cfg.gate_lr, weight_decay=0.0)
-    else:
-        optimizer = schedulefree.AdamWScheduleFree(tunable_params, lr=tuning_cfg.gate_lr, weight_decay=0.0)
+
+    optimizer = schedulefree.AdamWScheduleFree(tunable_params, lr=tuning_cfg.gate_lr, weight_decay=0.0)
     print("Tuning last-layer text-mixing params")
 
     reg.model.eval()
@@ -320,10 +217,14 @@ def fine_tune_external_gate(
                 X_point_context = np.concatenate((X_context_proc, X_tune_proc[:point_idx]))
                 y_point_context = np.concatenate((y_context, y_tune[:point_idx]))
                 text_point_context = np.concatenate((text_context, text_tune[:point_idx]), axis=0)
+                # When max_context_for_tune is set, each tuning step only sees the most recent
+                # rows from the accumulated context so training matches a fixed rolling window.
                 if tuning_cfg.max_context_for_tune is not None:
                     X_context_step = X_point_context[-tuning_cfg.max_context_for_tune:]
                     y_context_step = y_point_context[-tuning_cfg.max_context_for_tune:]
                     text_context_step = text_point_context[-tuning_cfg.max_context_for_tune:]
+                # Otherwise, each step uses the full available history: the original context
+                # plus every earlier tune row before the current prediction target.
                 else:
                     X_context_step = X_point_context
                     y_context_step = y_point_context
@@ -359,11 +260,6 @@ def fine_tune_external_gate(
                 point_loss = torch.nn.functional.mse_loss(pred_point, y_point_target)
                 (point_loss / current_batch_size).backward()
 
-            if tuning_cfg.gate_reg_strength > 0:
-                gate_prob = torch.sigmoid(gate)
-                gate_reg = (gate_prob * (1 - gate_prob)).mean()
-                (tuning_cfg.gate_reg_strength * gate_reg).backward()
-
             preds = torch.cat(preds_for_log, dim=0)
             y_target = torch.tensor(y_tune[start:end], dtype=torch.float32, device=reg.device)
             optimizer.step()
@@ -372,6 +268,7 @@ def fine_tune_external_gate(
                 with torch.no_grad():
                     gate.clamp_(-tuning_cfg.gate_logit_clamp, tuning_cfg.gate_logit_clamp)
 
+            # print if meeting log frequency or last step in epoch
             if (step_idx + 1) % tuning_cfg.step_log_every == 0 or step_idx == num_steps - 1:
                 preds_np = preds.detach().cpu().numpy()
                 mse = mean_squared_error(y_target.detach().cpu().numpy(), preds_np)
@@ -383,24 +280,13 @@ def fine_tune_external_gate(
                 )
         print(
             f"Epoch {epoch:02d} text-mixing params | "
-            f"gate: {gate_stats(gate)} | {linear_stats(reg)}"
+            f"{get_trainining_info(reg, gate)}"
         )
         if tuning_cfg.eval_each_epoch:
             if X_eval_proc is None or y_eval is None or text_eval is None:
                 raise ValueError("EVAL_EACH_EPOCH requires X_eval_proc, y_eval, and text_eval.")
             print(f"\n== Eval after epoch {epoch:02d} ==")
-            evaluate_rolling(
-                reg,
-                X_context_proc=X_context_proc,
-                y_context=y_context,
-                text_context=text_context,
-                X_eval_proc=X_tune_proc,
-                y_eval=y_tune,
-                text_eval=text_tune,
-                use_text=False,
-                label="Tune (no text attn)",
-                max_context=tuning_cfg.max_context_for_tune_eval,
-            )
+            # Rolling tune-split evaluation: predict tune points with text attention using only pre-tune context.
             evaluate_rolling(
                 reg,
                 X_context_proc=X_context_proc,
@@ -413,21 +299,11 @@ def fine_tune_external_gate(
                 label="Tune (with text attn)",
                 max_context=tuning_cfg.max_context_for_tune_eval,
             )
+            # Build eval-time context by appending the full tune segment, so eval predictions only use past rows.
             eval_context_proc = np.concatenate((X_context_proc, X_tune_proc))
             eval_y_context = np.concatenate((y_context, y_tune))
             eval_text_context = np.concatenate((text_context, text_tune), axis=0)
-            evaluate_rolling(
-                reg,
-                X_context_proc=eval_context_proc,
-                y_context=eval_y_context,
-                text_context=eval_text_context,
-                X_eval_proc=X_eval_proc,
-                y_eval=y_eval,
-                text_eval=text_eval,
-                use_text=False,
-                label="Eval (no text attn)",
-                max_context=tuning_cfg.max_context_for_eval,
-            )
+            # Rolling eval-split evaluation: predict held-out eval points with text attention from context+tune history.
             evaluate_rolling(
                 reg,
                 X_context_proc=eval_context_proc,
@@ -590,35 +466,7 @@ def main() -> None:
     )
 
     print("\n== After tuning ==")
-    if run_cfg.tuning.freeze_no_text_baseline:
-        _format_metrics("Tune (no text attn)", *baseline_no_text_tune)
-        _format_metrics("Eval (no text attn)", *baseline_no_text_eval)
-        tuned_no_text_eval = baseline_no_text_eval
-    else:
-        evaluate_rolling(
-            reg,
-            X_context_proc=X_context_proc,
-            y_context=y_context,
-            text_context=text_context,
-            X_eval_proc=X_tune_proc,
-            y_eval=y_tune,
-            text_eval=text_tune,
-            use_text=False,
-            label="Tune (no text attn)",
-            max_context=run_cfg.tuning.max_context_for_tune_eval,
-        )
-        tuned_no_text_eval = evaluate_rolling(
-            reg,
-            X_context_proc=eval_context_proc,
-            y_context=eval_y_context,
-            text_context=eval_text_context,
-            X_eval_proc=X_eval_proc,
-            y_eval=y_eval,
-            text_eval=text_eval,
-            use_text=False,
-            label="Eval (no text attn)",
-            max_context=run_cfg.tuning.max_context_for_eval,
-        )
+    _format_metrics("Tune (no text attn)", *baseline_no_text_tune)
     evaluate_rolling(
         reg,
         X_context_proc=X_context_proc,
@@ -631,6 +479,8 @@ def main() -> None:
         label="Tune (with text attn)",
         max_context=run_cfg.tuning.max_context_for_tune_eval,
     )
+    _format_metrics("Eval (no text attn)", *baseline_no_text_eval)
+    tuned_no_text_eval = baseline_no_text_eval
     tuned_text_eval = evaluate_rolling(
         reg,
         X_context_proc=eval_context_proc,
