@@ -17,16 +17,16 @@ try:
 except Exception:  # noqa: BLE001
     schedulefree = None
 
-from eval_fine_tune import _format_metrics, evaluate_rolling
-from fine_tune_dpt import (
+from fine_tuning.eval_fine_tune import _format_metrics, evaluate_rolling
+from fine_tuning.fine_tune_configs import load_dataset_config
+from fine_tuning.fine_tune_dpt import (
     freeze_all_but_last_gate,
     gate_stats,
-    load_dataset_config,
     load_tabdpt_regressor,
     preprocess_features,
 )
-from load_dataset import load_tabular_text_dataset
-from split_ts import time_split
+from fine_tuning.load_dataset import load_tabular_text_dataset
+from fine_tuning.split_ts import time_split
 
 
 torch.manual_seed(0)

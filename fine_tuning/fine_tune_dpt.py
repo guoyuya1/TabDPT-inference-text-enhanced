@@ -32,13 +32,19 @@ import schedulefree  # type: ignore
 import torch
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
-from fine_tune_configs import TuningConfig, load_fine_tune_config
 from tabdpt import TabDPTRegressor
 from tabdpt.utils import pad_x
 
-from eval_fine_tune import _format_metrics, evaluate_rolling
-from load_dataset import load_tabular_text_dataset
-from split_ts import time_split
+try:
+    from .eval_fine_tune import _format_metrics, evaluate_rolling
+    from .fine_tune_configs import TuningConfig, load_fine_tune_config
+    from .load_dataset import load_tabular_text_dataset
+    from .split_ts import time_split
+except ImportError:
+    from eval_fine_tune import _format_metrics, evaluate_rolling
+    from fine_tune_configs import TuningConfig, load_fine_tune_config
+    from load_dataset import load_tabular_text_dataset
+    from split_ts import time_split
 
 
 def load_tabdpt_regressor(

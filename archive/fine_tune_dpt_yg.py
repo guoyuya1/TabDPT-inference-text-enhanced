@@ -57,9 +57,9 @@ except ImportError:
 
     OmegaConf = _OmegaConfCompat
 
-from eval_fine_tune import _format_metrics, evaluate_rolling
-from load_dataset import load_tabular_text_dataset
-from split_ts import time_split
+from fine_tuning.eval_fine_tune import _format_metrics, evaluate_rolling
+from fine_tuning.load_dataset import load_tabular_text_dataset
+from fine_tuning.split_ts import time_split
 
 
 # -----------------------------

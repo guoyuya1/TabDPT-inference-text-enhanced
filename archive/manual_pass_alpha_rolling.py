@@ -18,16 +18,16 @@ try:
 except Exception:  # noqa: BLE001
     plt = None
 
-from eval_fine_tune import _format_metrics
-from fine_tune_dpt import (
+from fine_tuning.eval_fine_tune import _format_metrics
+from fine_tuning.fine_tune_configs import load_dataset_config
+from fine_tuning.fine_tune_dpt import (
     gate_stats,
     get_last_layer_gate_param,
-    load_dataset_config,
     load_tabdpt_regressor,
     preprocess_features,
 )
-from load_dataset import load_tabular_text_dataset
-from split_ts import time_split
+from fine_tuning.load_dataset import load_tabular_text_dataset
+from fine_tuning.split_ts import time_split
 from tabdpt.utils import pad_x
 
 

@@ -1,0 +1,48 @@
+data_path: Time-MMD/numerical/Energy/Energy_with_text_with_embeddings_lag_3.csv
+date_column: date
+numeric_features:
+- Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per
+  Gallon)
+- Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars
+  per Gallon)
+- Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars
+  per Gallon)
+- Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars
+  per Gallon)
+- Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per
+  Gallon)
+- Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per
+  Gallon)
+- Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars
+  per Gallon)
+- Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per
+  Gallon)
+target_column: OT
+embedding_columns:
+- embedding_report_fact_lag0
+- embedding_report_fact_lag1
+- embedding_report_fact_lag2
+- embedding_report_fact_lag3
+seed: 0
+max_rows: 1000
+context_ratio: 0.2
+tune_ratio: 0.65
+eval_ratio: 0.15
+model:
+  device: auto
+  model_weight_path: null
+  text_enhanced: true
+  use_flash: true
+  compile_model: true
+tuning:
+  epochs: 20
+  gate_lr: 0.5
+  gate_logit_clamp: 10.0
+  tune_batch_size: 650
+  max_context_for_tune: 1000
+  max_context_for_eval: 1000
+  max_context_for_tune_eval: 1000
+  eval_each_epoch: false
+  debug_text_effect: true
+  plot_output_root: results/fine_tune_plots
+  step_log_every: 50
