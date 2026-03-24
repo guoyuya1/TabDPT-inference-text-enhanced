@@ -1,4 +1,4 @@
-source_csv_path: Energy_with_text_gpt_analyzed_baseline.csv
+source_csv_path: Energy_gpt_analyzed_baseline.csv
 target_output_path: ../../processed_data/energy/Energy_with_text_gpt_analyzed_baseline_with_embeddings_{model_name}_lag_{lag}.csv
 
 text_columns:
