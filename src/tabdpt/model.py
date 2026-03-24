@@ -1,4 +1,5 @@
 from typing import Literal
+import math
 
 import torch
 import torch.nn as nn
@@ -25,6 +26,8 @@ class TabDPTModel(nn.Module):
         self.n_out = n_out
         self.use_flash = use_flash
         self.ninp = ninp
+        self.num_heads = nhead
+        self.nhid = nhid
         self.transformer_encoder = nn.ModuleList(
             [
                 TransformerEncoderLayer(
@@ -48,6 +51,7 @@ class TabDPTModel(nn.Module):
         x_src: torch.Tensor,
         y_src: torch.Tensor,
         task: Literal["cls", "reg"],  # classification or regression
+        text_enhanced_attn_weight: torch.Tensor | None = None,
     ) -> torch.Tensor:
         x_src = x_src.transpose(0, 1)
         y_src = y_src.squeeze(-1).transpose(0, 1)
@@ -69,9 +73,13 @@ class TabDPTModel(nn.Module):
         y_src = self.y_encoder(y_src.unsqueeze(-1))
         train_x = x_src[:eval_pos] + y_src
         src = torch.cat([train_x, x_src[eval_pos:]], 0)
-
-        for layer in self.transformer_encoder:
-            src = layer(src, eval_pos)
+        if text_enhanced_attn_weight is None:
+            for layer in self.transformer_encoder:
+                src = layer(src, eval_pos)
+        else:   
+            for layer in self.transformer_encoder[:-1]:
+                src = layer(src, eval_pos)
+            src = self.transformer_encoder[-1](src, eval_pos, text_enhanced_attn_weight)
         pred = self.head(src)
         if task == "reg":
             pred = pred[eval_pos:, ..., -1]
@@ -86,7 +94,7 @@ class TabDPTModel(nn.Module):
         return pred
 
     @classmethod
-    def load(cls, model_state, config, use_flash, clip_sigma: float = 4.):
+    def load(cls, model_state, config, use_flash, clip_sigma: float = 4., text_enhanced: bool = False):
         assert config.model.max_num_classes > 2
         model = TabDPTModel(
             dropout=config.training.dropout,
@@ -103,13 +111,27 @@ class TabDPTModel(nn.Module):
         model_state = {k.replace("_orig_mod.", ""): v for k, v in model_state.items()}
         model_state = {k.replace("model.", ""): v for k, v in model_state.items()}
         model.load_state_dict(model_state)
+        
+        # Replace last transformer layer with text-enhanced version
+        if text_enhanced:
+            last_idx = len(model.transformer_encoder) - 1
+            last_layer = model.transformer_encoder[last_idx]
+            model.transformer_encoder[last_idx] =TransformerEncoderLayer(
+                embed_dim=last_layer.embed_dim,
+                num_heads=last_layer.num_heads,
+                ff_dim=last_layer.ff[0].out_features,
+                text_enhanced=True,
+            )
+            # Copy pretrained weights to the new layer
+            model.transformer_encoder[last_idx].load_state_dict(last_layer.state_dict(), strict=False)
+        
         model.to(config.env.device)
         model.eval()
         return model
 
 
 class TransformerEncoderLayer(nn.Module):
-    def __init__(self, embed_dim, num_heads, ff_dim):
+    def __init__(self, embed_dim, num_heads, ff_dim, text_enhanced=False):
         super().__init__()
         self.embed_dim = embed_dim
         self.head_dim = embed_dim // num_heads
@@ -124,7 +146,29 @@ class TransformerEncoderLayer(nn.Module):
         self.q_norm = LayerNorm(self.head_dim)
         self.k_norm = LayerNorm(self.head_dim)
 
-    def forward(self, x, eval_pos):
+        if text_enhanced:
+            # one alpha for all heads
+            # self.alpha = nn.Parameter(torch.zeros(1))
+            # Per-head gating parameter: one alpha per attention head
+            # initialize gating value =0.5
+            self.alpha = nn.Parameter(torch.zeros(num_heads))
+
+            # initialize gating value roughly to 1
+            # Initialize to a large positive logit so sigmoid(alpha) starts ~1.0.
+            self.alpha = nn.Parameter(torch.full((num_heads,), 10.0))
+            # One per-head projection for text attention logits: Linear -> GELU.
+            self.text_attn_linears = nn.ModuleList(
+                [nn.Sequential(nn.Linear(1, 1), nn.GELU()) for _ in range(num_heads)]
+            )
+            
+            with torch.no_grad():
+                for proj in self.text_attn_linears:
+                    proj[0].weight.fill_(1.0)
+                    proj[0].bias.zero_()
+            
+            # self.register_buffer('ts_gating_val', torch.ones(1))
+
+    def forward(self, x, eval_pos, text_enhanced_attn_weight: torch.Tensor | None = None):
         x = x.transpose(0, 1)
         B, L, _ = x.size()
         h = self.attn_norm(x)
@@ -134,8 +178,80 @@ class TransformerEncoderLayer(nn.Module):
         k = k.view(B, eval_pos, self.num_heads, self.head_dim).transpose(1, 2)
         v = v.view(B, eval_pos, self.num_heads, self.head_dim).transpose(1, 2)
         q, k = self.q_norm(q), self.k_norm(k)
-        attn = F.scaled_dot_product_attention(q, k, v).transpose(1, 2)
+        if text_enhanced_attn_weight is None:
+            attn = F.scaled_dot_product_attention(q, k, v).transpose(1, 2)
+            # _, _, attn = _scaled_dot_product_attention_with_attention_scores(q, k, v)
+            # attn = attn.transpose(1, 2)
+        else:
+            # N: number of training & test samples 
+            # N_train=eval_pos: number of training samples
+            # B: batch size
+            # attn_weight: (B, num_heads, N, N_train) — softmaxed attention weights
+            attn_logit, attn_weight, _ = _scaled_dot_product_attention_with_attention_scores(q, k, v)
+            # text_enhanced_attn_weight: (B, N, N_train) -> (B, num_heads, N, N_train)
+            # same text_enhanced_atten_weight for all heads
+            text_enhanced_attn_weight = text_enhanced_attn_weight.unsqueeze(1).repeat(1, self.num_heads, 1, 1)
+            # Compute per-head gating values from learnable parameter: (num_heads,)
+            ts_gating_val = torch.sigmoid(self.alpha)  # Shape: (num_heads,)
+            # Reshape for broadcasting: (1, num_heads, 1, 1) to match (B, num_heads, N, N_train)
+            ts_gating_val = ts_gating_val.view(1, self.num_heads, 1, 1)
+            # Blend attention weights: each head uses its own gating value
+            # Only apply blending to test samples (last N_test rows in second-to-last dimension)
+            # Split into train and test parts
+            attn_weight_train = attn_weight[:, :, :eval_pos, :]  # (B, num_heads, N_train, N_train)
+            attn_weight_test = attn_weight[:, :, eval_pos:, :]  # (B, num_heads, N_test, N_train)
+            # Apply blending only to test part - slice text_enhanced_attn_weight to match test positions
+            text_enhanced_attn_weight_test = text_enhanced_attn_weight[:, :, eval_pos:, :]  # (B, num_heads, N_test, N_train)
+            # Apply one trainable linear transform per head to cosine logits, then softmax.
+            head_logits = []
+            for h in range(self.num_heads):
+                head_logit = text_enhanced_attn_weight_test[:, h:h + 1, :, :]  # (B, 1, N_test, N_train)
+                head_logit = self.text_attn_linears[h](head_logit.unsqueeze(-1)).squeeze(-1)
+                head_logits.append(head_logit)
+            text_enhanced_attn_logits_test = torch.cat(head_logits, dim=1)
+            text_enhanced_attn_weight_test = torch.softmax(text_enhanced_attn_logits_test, dim=-1)
+            attn_weight_test = attn_weight_test * ts_gating_val + (1 - ts_gating_val) * text_enhanced_attn_weight_test
+            # Concatenate back
+            attn_weight = torch.cat([attn_weight_train, attn_weight_test], dim=2)  # (B, num_heads, N, N_train)
+            attn = attn_weight @ v
+            attn = attn.transpose(1, 2)
         attn = self.out_proj(attn.reshape(B, L, self.num_heads * self.head_dim))
         x = x + attn
         x = x + self.ff(self.ff_norm(x))
         return x.transpose(0, 1)
+
+
+# from pytorch v2.8.0
+# Efficient implementation equivalent to the following:
+ 
+def _scaled_dot_product_attention_with_attention_scores(query, key, value, attn_mask=None, dropout_p=0.0,
+        is_causal=False, scale=None, enable_gqa=False) -> torch.Tensor:
+    L, S = query.size(-2), key.size(-2)
+    scale_factor = 1 / math.sqrt(query.size(-1)) if scale is None else scale
+    attn_bias = torch.zeros(L, S, dtype=query.dtype, device=query.device)
+    if is_causal:
+        assert attn_mask is None
+        temp_mask = torch.ones(L, S, dtype=torch.bool).tril(diagonal=0)
+        attn_bias.masked_fill_(temp_mask.logical_not(), float("-inf"))
+
+    if attn_mask is not None:
+        if attn_mask.dtype == torch.bool:
+            attn_bias.masked_fill_(attn_mask.logical_not(), float("-inf"))
+        else:
+            attn_bias = attn_mask + attn_bias
+
+    if enable_gqa:
+        key = key.repeat_interleave(query.size(-3)//key.size(-3), -3)
+        value = value.repeat_interleave(query.size(-3)//value.size(-3), -3)
+
+    attn_logit = query @ key.transpose(-2, -1) * scale_factor
+
+    # this line does not change the attention weights for tabdpt
+    attn_logit += attn_bias
+    attn_weight = torch.softmax(attn_logit, dim=-1)
+
+    # tabdpt use dropout_p=0.0, this line does not change the attention weights
+    attn_weight = torch.dropout(attn_weight, dropout_p, train=True)
+
+    # return the attention logit, attention weight and the attention output
+    return attn_logit, attn_weight, attn_weight @ value

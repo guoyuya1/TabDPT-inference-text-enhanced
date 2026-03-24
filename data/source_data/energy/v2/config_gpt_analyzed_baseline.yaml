@@ -1,0 +1,26 @@
+source_csv_path: Energy_gpt_analyzed_baseline.csv
+target_output_path: ../../processed_data/energy/Energy_with_text_gpt_analyzed_baseline_with_embeddings_{model_name}_lag_{lag}.csv
+
+text_columns:
+  - search_fact_summary_gpt_5_2
+
+numerical_columns:
+  - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)
+  - Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)
+  - Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)
+  - Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)
+  - Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)
+  - Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)
+  - Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)
+  - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)
+  - OT
+
+target_columns:
+  - OT
+
+date_column: date
+model_name: Qwen/Qwen3-Embedding-8B
+lag_days: 7
+batch_size: 8
+max_length: 1024
+na_text: n/a

@@ -7,11 +7,9 @@ from tabdpt import estimator
 @patch("tabdpt.estimator.safe_open")
 @patch("tabdpt.estimator.torch.cuda.is_available", return_value=False)
 @patch("tabdpt.estimator.json.loads", return_value={"env": {}})
-@patch("tabdpt.estimator.OmegaConf.create")
 @patch("tabdpt.estimator.TabDPTModel.load", return_value=MagicMock(num_features=10, n_out=2))
 def test_model_weight_path_set_or_download_from_hf(
     mock_model_load,
-    mock_omega_create,
     mock_json_loads,
     mock_cuda_available,
     mock_safe_open,
