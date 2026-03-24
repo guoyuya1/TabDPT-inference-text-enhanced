@@ -1,4 +1,4 @@
-data_path: data/processed_data/bitcoin/bitcoin_price_news_daily_gpt_analyzed_concise_gpt-5.2_with_embeddings_Qwen-Qwen3-Embedding-8B_lag_7_with_numeric_lag3.csv
+data_path: data/processed_data/bitcoin/bitcoin_gpt_analyzed_concise_text_lag_7_numeric_lag3.csv
 date_column: Date
 numeric_features:
 - Open_lag1
@@ -35,7 +35,7 @@ model:
   use_flash: true
   compile_model: true
 tuning:
-  epochs: 20
+  epochs: 50
   gate_lr: 0.5
   gate_logit_clamp: 10.0
   tune_batch_size: 650
@@ -44,4 +44,5 @@ tuning:
   max_context_for_tune_eval: 1000
   eval_each_epoch: false
   debug_text_effect: true
+  log_text_mixing_params: true
   step_log_every: 50

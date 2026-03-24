@@ -84,14 +84,14 @@ Run it with:
 
 ```bash
 python -m fine_tuning.fine_tune_dpt \
-  --config fine_tuning/fine_tuning_configs/bitcoin_v1.yaml
+  --config fine_tuning/configs/bitcoin_v1.yaml
 ```
 
 If you are running from the repo without installing the package, use:
 
 ```bash
 PYTHONPATH=src python -m fine_tuning.fine_tune_dpt \
-  --config fine_tuning/fine_tuning_configs/bitcoin_v1.yaml
+  --config fine_tuning/configs/bitcoin_v1.yaml
 ```
 
 The fine-tuning YAML controls:
@@ -103,3 +103,9 @@ The fine-tuning YAML controls:
 - split ratios
 - model settings
 - tuning settings
+
+Set `tuning.log_text_mixing_params: false` if you want to suppress the per-epoch line like:
+
+```text
+Epoch 43 text-mixing params | gate: ...
+```

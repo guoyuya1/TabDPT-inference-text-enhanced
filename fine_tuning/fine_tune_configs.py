@@ -26,6 +26,7 @@ class TuningConfig:
     max_context_for_tune_eval: int | None
     eval_each_epoch: bool
     debug_text_effect: bool
+    log_text_mixing_params: bool
     step_log_every: int
 
 

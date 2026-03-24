@@ -1,26 +1,18 @@
 """
-Fine-tune the model's trainable `alpha` (text-attention blending gate).
+Config-driven fine-tuning of TabDPT's last-layer text-mixing parameters.
 
-The goal: only update the gate parameters that control how much the model trusts
-external text attention when predicting *test rows from train context*.
+This script expects a processed CSV with numeric features, a numeric target, and
+text embedding columns. It loads one YAML config, splits the data
+chronologically into context / tune / eval, fits the base TabDPT regressor on
+the context split, and then fine-tunes only the last layer's text-mixing
+parameters:
 
-This script is written in a step-by-step style. Each step is explained in code
-and comments so you can port it to a notebook cell-by-cell.
+- the per-head `alpha` gate logits
+- the per-head text attention linear layers
 
-What the gate is in THIS repo
------------------------------
-In `tabdpt/model.py`, the transformer stack is set up as:
-- layers 0..(L-2): normal attention
-- last layer: `text_enhanced=True` and has `alpha` (per-head logits)
-
-During the last layer's datapoint attention:
-- train rows attend to train rows (no external attention)
-- test rows attend to train rows, optionally mixing in text similarity attention
-  computed from text embeddings
-
-The gate parameter stored on the last block is a vector of logits with shape (H,),
-one per attention head. The forward pass applies `sigmoid()` to obtain values in
-(0, 1), which are then used as a blending coefficient.
+Fine-tuning uses rolling one-step prediction on the tune split, so each target
+row only sees past rows as context. The script prints baseline and post-tuning
+rolling metrics, with optional per-epoch text-mixing parameter summaries.
 """
 
 from __future__ import annotations
@@ -94,11 +86,6 @@ def preprocess_features(
 
     return X_proc.astype(np.float32)
 
-
-# Evaluation helpers live in eval_fine_tune.py.
-# -----------------------------
-# Step 5) Gate-only parameter selection
-# -----------------------------
 def get_last_layer_gate_param(reg: TabDPTRegressor) -> torch.nn.Parameter:
     """
     Return the trainable gate parameter (per-head logits) from the last transformer block.
@@ -112,7 +99,7 @@ def get_last_layer_gate_param(reg: TabDPTRegressor) -> torch.nn.Parameter:
 
 
 def freeze_all_but_last_gate(reg: TabDPTRegressor) -> tuple[torch.nn.Parameter, list[torch.nn.Parameter]]:
-    """Freeze all parameters except the last block's alpha gate + per-head text linear layers."""
+    """Freeze all parameters except the last block's text-mixing parameters."""
     for p in reg.model.parameters():
         p.requires_grad_(False)
     last_block = reg.model.transformer_encoder[-1]
@@ -166,11 +153,6 @@ def get_trainining_info(reg: TabDPTRegressor, gate_logits: torch.Tensor) -> str:
         summaries.append(line)
     return f"gate: {gate_stats(gate_logits)} | {' '.join(summaries)}"
 
-
-# -----------------------------
-# Step 6) Fine-tuning loop (calls reg.model directly)
-# Rolling window: at step i, train on context + tune[0:i], predict tune[i].
-# -----------------------------
 def fine_tune_external_gate(
     reg: TabDPTRegressor,
     *,
@@ -186,7 +168,7 @@ def fine_tune_external_gate(
     text_eval: np.ndarray | None = None,
 ) -> None:
     """
-    Fine-tune only the last layer's text mixing parameters (alpha gate + per-head text affine).
+    Fine-tune only the last layer's text-mixing parameters.
 
     Why call the model directly?
     - `reg.predict()` disables gradients, so we can't optimize with it.
@@ -274,7 +256,6 @@ def fine_tune_external_gate(
                 with torch.no_grad():
                     gate.clamp_(-tuning_cfg.gate_logit_clamp, tuning_cfg.gate_logit_clamp)
 
-            # print if meeting log frequency or last step in epoch
             if (step_idx + 1) % tuning_cfg.step_log_every == 0 or step_idx == num_steps - 1:
                 preds_np = preds.detach().cpu().numpy()
                 mse = mean_squared_error(y_target.detach().cpu().numpy(), preds_np)
@@ -284,10 +265,11 @@ def fine_tune_external_gate(
                     f"Epoch {epoch:02d} Step {step_idx+1:03d}/{num_steps} "
                     f"| MAE: {mae:.4f} | RMSE: {rmse:.4f}"
                 )
-        print(
-            f"Epoch {epoch:02d} text-mixing params | "
-            f"{get_trainining_info(reg, gate)}"
-        )
+        if tuning_cfg.log_text_mixing_params:
+            print(
+                f"Epoch {epoch:02d} text-mixing params | "
+                f"{get_trainining_info(reg, gate)}"
+            )
         if tuning_cfg.eval_each_epoch:
             if X_eval_proc is None or y_eval is None or text_eval is None:
                 raise ValueError("EVAL_EACH_EPOCH requires X_eval_proc, y_eval, and text_eval.")
@@ -329,7 +311,7 @@ def fine_tune_external_gate(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Fine-tune alpha gate on a configured dataset.")
+    parser = argparse.ArgumentParser(description="Fine-tune last-layer text-mixing parameters on a configured dataset.")
     parser.add_argument("--dataset", help="Dataset key in the config file.")
     parser.add_argument("--config", required=True, help="Path to dataset config YAML.")
     args = parser.parse_args()

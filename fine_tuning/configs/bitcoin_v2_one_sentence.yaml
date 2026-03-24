@@ -44,4 +44,5 @@ tuning:
   max_context_for_tune_eval: 1000
   eval_each_epoch: false
   debug_text_effect: true
+  log_text_mixing_params: true
   step_log_every: 50

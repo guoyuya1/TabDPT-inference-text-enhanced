@@ -1,14 +1,27 @@
-data_path: data/processed_data/economy/Economy_with_text_summarized_with_embeddings_Qwen_Qwen3-Embedding-4B_lag_3.csv
-date_column: date
+data_path: data/processed_data/bitcoin_synthetic_data.csv
+date_column: Date
 numeric_features:
-- Exports
-- Imports
-target_column: OT
+- Open_lag1
+- Open_lag2
+- Open_lag3
+- High_lag1
+- High_lag2
+- High_lag3
+- Low_lag1
+- Low_lag2
+- Low_lag3
+- Close_lag1
+- Close_lag2
+- Close_lag3
+- Adj_Close_lag1
+- Adj_Close_lag2
+- Adj_Close_lag3
+target_column: Adj_Close
 embedding_lags: []
 embedding_columns:
-- embedding_search_fact_summary_gpt_5_2_lag1
-- embedding_search_fact_summary_gpt_5_2_lag2
-- embedding_search_fact_summary_gpt_5_2_lag3
+- embedding_summary_gpt-5-mini_lag1
+- embedding_summary_gpt-5-mini_lag2
+- embedding_summary_gpt-5-mini_lag3
 embedding_column_template: null
 seed: 0
 max_rows: 1000
@@ -31,5 +44,5 @@ tuning:
   max_context_for_tune_eval: 1000
   eval_each_epoch: false
   debug_text_effect: true
-  log_text_mixing_params: true
+  log_text_mixing_params: false
   step_log_every: 50
