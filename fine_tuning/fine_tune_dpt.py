@@ -23,6 +23,7 @@ import numpy as np
 import schedulefree  # type: ignore
 import torch
 from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.preprocessing import StandardScaler
 
 from tabdpt import TabDPTRegressor
 from tabdpt.utils import pad_x
@@ -56,7 +57,6 @@ def load_tabdpt_regressor(
         use_flash=use_flash,
         compile=compile_model,
     )
-
 
 def preprocess_features(
     reg: TabDPTRegressor,

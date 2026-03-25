@@ -6,6 +6,7 @@ uv.lock
 eval_output/
 build/
 logs/
+tests_notebook/
 # Generated experiment artifacts
 results/
 

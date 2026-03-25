@@ -32,6 +32,9 @@ def load_tabular_text_dataset(
     - text: (N, L, D) text embeddings (lags are treated as separate text features)
     """
     df = pd.read_csv(path)
+    df[target_column] = np.log1p(df[target_column].values)
+    df[[col for col in numeric_features if "text_signal" not in col]] = np.log1p(df[[col for col in numeric_features if "text_signal" not in col]].values)
+    df[[col for col in numeric_features if "text_signal" in col]] = df[[col for col in numeric_features if "text_signal"  in col]].values/6000
 
     # Sort by date to make chronological splits meaningful.
     if date_column and date_column in df.columns:
