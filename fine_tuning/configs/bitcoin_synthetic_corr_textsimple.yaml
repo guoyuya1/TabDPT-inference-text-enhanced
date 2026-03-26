@@ -1,0 +1,36 @@
+data_path: data/processed_data/bitcoin_synthetic_data_corr_textsimple.csv
+date_column: Date
+numeric_features:
+- target_lag1
+- target_lag2
+- target_lag3
+target_column: target
+embedding_lags: []
+embedding_columns:
+- embedding_summary_synthetic_lag1
+- embedding_summary_synthetic_lag2
+- embedding_summary_synthetic_lag3
+embedding_column_template: null
+seed: 0
+max_rows: 1000
+context_ratio: 0.2
+tune_ratio: 0.65
+eval_ratio: 0.15
+model:
+  device: auto
+  model_weight_path: null
+  text_enhanced: true
+  use_flash: false
+  compile_model: true
+tuning:
+  epochs: 20
+  gate_lr: 0.5
+  gate_logit_clamp: 10.0
+  tune_batch_size: 650
+  max_context_for_tune: 1000
+  max_context_for_eval: 1000
+  max_context_for_tune_eval: 1000
+  eval_each_epoch: false
+  debug_text_effect: true
+  log_text_mixing_params: false
+  step_log_every: 50

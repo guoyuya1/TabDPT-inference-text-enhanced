@@ -4,7 +4,8 @@ import ast
 
 import numpy as np
 import pandas as pd
-
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_absolute_error, r2_score
 
 def _parse_embedding_column(series: pd.Series) -> np.ndarray:
     """Parse a CSV embedding column (stringified list) to a float32 array (N, D)."""
@@ -32,9 +33,21 @@ def load_tabular_text_dataset(
     - text: (N, L, D) text embeddings (lags are treated as separate text features)
     """
     df = pd.read_csv(path)
-    df[target_column] = np.log1p(df[target_column].values)
-    df[[col for col in numeric_features if "text_signal" not in col]] = np.log1p(df[[col for col in numeric_features if "text_signal" not in col]].values)
-    df[[col for col in numeric_features if "text_signal" in col]] = df[[col for col in numeric_features if "text_signal"  in col]].values/6000
+
+    train_size = 200
+    train_df_temp = df.iloc[7:train_size]
+    test_df_temp = df.iloc[train_size:]
+
+    linmod_additive = LinearRegression()
+    linmod_additive.fit(train_df_temp[numeric_features], train_df_temp[target_column])
+    y_train_pred = linmod_additive.predict(train_df_temp[numeric_features])
+    y_test_pred = linmod_additive.predict(test_df_temp[numeric_features])
+
+    print("Linear regression baseline")
+    print("Train MAE:", mean_absolute_error(train_df_temp[target_column], y_train_pred))
+    print("Train R2:", r2_score(train_df_temp[target_column], y_train_pred))
+    print("Test MAE:", mean_absolute_error(test_df_temp[target_column], y_test_pred))
+    print("Test R2:", r2_score(test_df_temp[target_column], y_test_pred))
 
     # Sort by date to make chronological splits meaningful.
     if date_column and date_column in df.columns:
