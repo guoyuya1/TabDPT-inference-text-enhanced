@@ -153,6 +153,24 @@ def get_trainining_info(reg: TabDPTRegressor, gate_logits: torch.Tensor) -> str:
         summaries.append(line)
     return f"gate: {gate_stats(gate_logits)} | {' '.join(summaries)}"
 
+
+def _normalized_regression_loss(
+    y_pred: torch.Tensor,
+    y_true: torch.Tensor,
+    mean_y: torch.Tensor,
+    std_y: torch.Tensor,
+    loss_type: str,
+) -> torch.Tensor:
+    mean_y = mean_y.reshape(-1)
+    std_y = std_y.reshape(-1)
+    y_pred_norm = (y_pred - mean_y) / std_y
+    y_true_norm = (y_true - mean_y) / std_y
+    if loss_type == "l1":
+        return torch.nn.functional.l1_loss(y_pred_norm, y_true_norm)
+    if loss_type == "l2":
+        return torch.nn.functional.mse_loss(y_pred_norm, y_true_norm)
+    raise ValueError(f"Unsupported tuning loss_type: {loss_type!r}. Expected 'l1' or 'l2'.")
+
 def fine_tune_external_gate(
     reg: TabDPTRegressor,
     *,
@@ -184,7 +202,7 @@ def fine_tune_external_gate(
     gate, tunable_params = freeze_all_but_last_gate(reg)
 
     optimizer = schedulefree.AdamWScheduleFree(tunable_params, lr=tuning_cfg.gate_lr, weight_decay=0.0)
-    print("Tuning last-layer text-mixing params")
+    print(f"Tuning last-layer text-mixing params (loss_type={tuning_cfg.loss_type})")
 
     reg.model.eval()
     if hasattr(optimizer, "train"):
@@ -200,6 +218,7 @@ def fine_tune_external_gate(
 
             current_batch_size = end - start
             preds_for_log: list[torch.Tensor] = []
+            loss_sum = 0.0
 
             for point_idx in range(start, end):
                 X_point_context = np.concatenate((X_context_proc, X_tune_proc[:point_idx]))
@@ -232,12 +251,13 @@ def fine_tune_external_gate(
                 X_test_tensor = pad_x(X_test_tensor, reg.max_features)
                 y_context_tensor = torch.tensor(y_context_step, dtype=torch.float32, device=reg.device).unsqueeze(0)
 
-                pred_point = reg.model(
+                pred_point, std_y, mean_y = reg.model(
                     x_src=torch.cat([X_train_tensor, X_test_tensor], dim=1),
                     y_src=y_context_tensor.unsqueeze(-1),
                     task="reg",
                     text_enhanced_attn_weight=attn_weight_external,
-                ).squeeze(-1).reshape(-1)
+                )
+                pred_point = pred_point.squeeze(-1).reshape(-1)
                 preds_for_log.append(pred_point.detach())
 
                 y_point_target = torch.tensor(
@@ -245,7 +265,14 @@ def fine_tune_external_gate(
                     dtype=torch.float32,
                     device=reg.device,
                 )
-                point_loss = torch.nn.functional.mse_loss(pred_point, y_point_target)
+                point_loss = _normalized_regression_loss(
+                    pred_point,
+                    y_point_target,
+                    mean_y,
+                    std_y,
+                    tuning_cfg.loss_type,
+                )
+                loss_sum += float(point_loss.detach().cpu())
                 (point_loss / current_batch_size).backward()
 
             preds = torch.cat(preds_for_log, dim=0)
@@ -258,12 +285,13 @@ def fine_tune_external_gate(
 
             if (step_idx + 1) % tuning_cfg.step_log_every == 0 or step_idx == num_steps - 1:
                 preds_np = preds.detach().cpu().numpy()
+                avg_loss = loss_sum / current_batch_size
                 mse = mean_squared_error(y_target.detach().cpu().numpy(), preds_np)
                 rmse = float(np.sqrt(mse))
                 mae = mean_absolute_error(y_target.detach().cpu().numpy(), preds_np)
                 print(
                     f"Epoch {epoch:02d} Step {step_idx+1:03d}/{num_steps} "
-                    f"| MAE: {mae:.4f} | RMSE: {rmse:.4f}"
+                    f"| Loss: {avg_loss:.4f} | MAE: {mae:.4f} | RMSE: {rmse:.4f}"
                 )
         if tuning_cfg.log_text_mixing_params:
             print(
@@ -436,7 +464,12 @@ def main() -> None:
             f"Eval text effect | ΔMAE={delta_mae:.6f} | "
             f"ΔRMSE={delta_rmse:.6f} | ΔMAPE={delta_mape:.6f}%"
         )
-    print("Initial text-mixing gate:", gate_stats(get_last_layer_gate_param(reg)))
+        print(
+            "Initial text-mixing params:",
+            get_trainining_info(reg, get_last_layer_gate_param(reg)),
+        )
+    else:
+        print("Initial text-mixing gate:", gate_stats(get_last_layer_gate_param(reg)))
 
     print("\n== Fine-tuning text-mixing parameters ==")
     fine_tune_external_gate(
@@ -489,7 +522,12 @@ def main() -> None:
             f"Eval text effect | ΔMAE={delta_mae:.6f} | "
             f"ΔRMSE={delta_rmse:.6f} | ΔMAPE={delta_mape:.6f}%"
         )
-    print("Tuned text-mixing gate:", gate_stats(get_last_layer_gate_param(reg)))
+        print(
+            "Tuned text-mixing params:",
+            get_trainining_info(reg, get_last_layer_gate_param(reg)),
+        )
+    else:
+        print("Tuned text-mixing gate:", gate_stats(get_last_layer_gate_param(reg)))
 
 
 if __name__ == "__main__":

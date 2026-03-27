@@ -88,6 +88,7 @@ def evaluate_rolling(
                 task="reg",
                 text_enhanced_attn_weight=text_enhanced_attn_weight,
             )
+            pred, _, _ = pred
             preds[idx] = pred.squeeze(-1).reshape(-1).detach().cpu().numpy()[0]
 
     mae, rmse, mape = _compute_metrics(y_eval, preds)

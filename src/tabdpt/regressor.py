@@ -74,6 +74,7 @@ class TabDPTRegressor(TabDPTEstimator, RegressorMixin):
                 task=self.mode,
                 text_enhanced_attn_weight=text_enhanced_attn_weight,
             )
+            pred, _, _ = pred
 
             return pred.float().squeeze().detach().cpu().float().numpy()
         else:
@@ -116,6 +117,7 @@ class TabDPTRegressor(TabDPTEstimator, RegressorMixin):
                     task=self.mode,
                     text_enhanced_attn_weight=text_enhanced_attn_weight,
                 )
+                pred, _, _ = pred
 
                 pred_list.append(pred.squeeze(dim=0))
 
@@ -159,4 +161,3 @@ class TabDPTRegressor(TabDPTEstimator, RegressorMixin):
         #     task=self.mode,
         #     text_enhanced_attn_weight=text_enhanced_attn_weight,
         # )
-
