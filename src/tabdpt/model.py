@@ -52,7 +52,12 @@ class TabDPTModel(nn.Module):
         y_src: torch.Tensor,
         task: Literal["cls", "reg"],  # classification or regression
         text_enhanced_attn_weight: torch.Tensor | None = None,
-    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        manual_last_layer_attn_weight: torch.Tensor | None = None,
+        return_last_layer_attn: bool = False,
+        return_query_prehead_tokens: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor, torch.Tensor] | tuple[
+        torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
+    ]:
         x_src = x_src.transpose(0, 1)
         y_src = y_src.squeeze(-1).transpose(0, 1)
         eval_pos = y_src.shape[0]
@@ -73,13 +78,42 @@ class TabDPTModel(nn.Module):
         y_src = self.y_encoder(y_src.unsqueeze(-1))
         train_x = x_src[:eval_pos] + y_src
         src = torch.cat([train_x, x_src[eval_pos:]], 0)
+        final_attn_weight = None
         if text_enhanced_attn_weight is None:
-            for layer in self.transformer_encoder:
-                src = layer(src, eval_pos)
-        else:   
+            for i, layer in enumerate(self.transformer_encoder):
+                capture = return_last_layer_attn and i == len(self.transformer_encoder) - 1
+                manual_attn = (
+                    manual_last_layer_attn_weight if i == len(self.transformer_encoder) - 1 else None
+                )
+                if capture:
+                    src, final_attn_weight = layer(
+                        src,
+                        eval_pos,
+                        return_attn_weights=True,
+                        manual_attn_weight=manual_attn,
+                    )
+                else:
+                    src = layer(src, eval_pos, manual_attn_weight=manual_attn)
+        else:
             for layer in self.transformer_encoder[:-1]:
                 src = layer(src, eval_pos)
-            src = self.transformer_encoder[-1](src, eval_pos, text_enhanced_attn_weight)
+            if return_last_layer_attn:
+                src, final_attn_weight = self.transformer_encoder[-1](
+                    src,
+                    eval_pos,
+                    text_enhanced_attn_weight,
+                    return_attn_weights=True,
+                    manual_attn_weight=manual_last_layer_attn_weight,
+                )
+            else:
+                src = self.transformer_encoder[-1](
+                    src,
+                    eval_pos,
+                    text_enhanced_attn_weight,
+                    manual_attn_weight=manual_last_layer_attn_weight,
+                )
+        query_prehead_tokens = src[eval_pos:] if return_query_prehead_tokens else None
+
         pred = self.head(src)
         if task == "reg":
             pred = pred[eval_pos:, ..., -1]
@@ -90,8 +124,21 @@ class TabDPTModel(nn.Module):
 
         if task == "reg":
             pred = pred * std_y + mean_y
+            extras = []
+            if return_last_layer_attn:
+                extras.append(final_attn_weight)
+            if return_query_prehead_tokens:
+                extras.append(query_prehead_tokens)
+            if extras:
+                return (pred, std_y, mean_y, *extras)
             return pred, std_y, mean_y
 
+        if return_query_prehead_tokens and return_last_layer_attn:
+            return pred, final_attn_weight, query_prehead_tokens
+        if return_last_layer_attn:
+            return pred, final_attn_weight
+        if return_query_prehead_tokens:
+            return pred, query_prehead_tokens
         return pred
 
     @classmethod
@@ -169,7 +216,14 @@ class TransformerEncoderLayer(nn.Module):
             
             # self.register_buffer('ts_gating_val', torch.ones(1))
 
-    def forward(self, x, eval_pos, text_enhanced_attn_weight: torch.Tensor | None = None):
+    def forward(
+        self,
+        x,
+        eval_pos,
+        text_enhanced_attn_weight: torch.Tensor | None = None,
+        return_attn_weights: bool = False,
+        manual_attn_weight: torch.Tensor | None = None,
+    ):
         x = x.transpose(0, 1)
         B, L, _ = x.size()
         h = self.attn_norm(x)
@@ -179,10 +233,22 @@ class TransformerEncoderLayer(nn.Module):
         k = k.view(B, eval_pos, self.num_heads, self.head_dim).transpose(1, 2)
         v = v.view(B, eval_pos, self.num_heads, self.head_dim).transpose(1, 2)
         q, k = self.q_norm(q), self.k_norm(k)
-        if text_enhanced_attn_weight is None:
-            attn = F.scaled_dot_product_attention(q, k, v).transpose(1, 2)
-            # _, _, attn = _scaled_dot_product_attention_with_attention_scores(q, k, v)
-            # attn = attn.transpose(1, 2)
+        if manual_attn_weight is not None:
+            if manual_attn_weight.dim() == 3:
+                manual_attn_weight = manual_attn_weight.unsqueeze(0)
+            attn_weight = manual_attn_weight.to(device=q.device, dtype=q.dtype)
+            if attn_weight.shape != (B, self.num_heads, L, eval_pos):
+                raise ValueError(
+                    f"manual_attn_weight must have shape {(B, self.num_heads, L, eval_pos)}, "
+                    f"got {tuple(attn_weight.shape)}"
+                )
+            attn = (attn_weight @ v).transpose(1, 2)
+        elif text_enhanced_attn_weight is None:
+            if return_attn_weights:
+                _, attn_weight, _ = _scaled_dot_product_attention_with_attention_scores(q, k, v)
+                attn = (attn_weight @ v).transpose(1, 2)
+            else:
+                attn = F.scaled_dot_product_attention(q, k, v).transpose(1, 2)
         else:
             # N: number of training & test samples 
             # N_train=eval_pos: number of training samples
@@ -219,6 +285,8 @@ class TransformerEncoderLayer(nn.Module):
         attn = self.out_proj(attn.reshape(B, L, self.num_heads * self.head_dim))
         x = x + attn
         x = x + self.ff(self.ff_norm(x))
+        if return_attn_weights:
+            return x.transpose(0, 1), attn_weight
         return x.transpose(0, 1)
 
 
