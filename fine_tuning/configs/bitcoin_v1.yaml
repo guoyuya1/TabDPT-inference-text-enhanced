@@ -28,13 +28,13 @@ context_ratio: 0.2
 tune_ratio: 0.65
 eval_ratio: 0.15
 tuning:
-  epochs: 50
+  epochs: 100
   gate_lr: 0.5
   gate_logit_clamp: 10.0
   tune_batch_size: 650
-  max_context_for_tune: 1000
-  max_context_for_eval: 1000
-  max_context_for_tune_eval: 1000
+  max_context_for_tune: 100
+  max_context_for_eval: 100
+  max_context_for_tune_eval: 100
   eval_each_epoch: false
   debug_text_effect: true
   log_text_mixing_params: true

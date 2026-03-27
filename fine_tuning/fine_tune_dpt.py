@@ -8,7 +8,7 @@ the context split, and then fine-tunes only the last layer's text-mixing
 parameters:
 
 - the per-head `alpha` gate logits
-- the per-head text attention linear layers
+- the per-head text attention MLPs
 
 Fine-tuning uses rolling one-step prediction on the tune split, so each target
 row only sees past rows as context. The script prints baseline and post-tuning
@@ -86,6 +86,7 @@ def preprocess_features(
 
     return X_proc.astype(np.float32)
 
+
 def get_last_layer_gate_param(reg: TabDPTRegressor) -> torch.nn.Parameter:
     """
     Return the trainable gate parameter (per-head logits) from the last transformer block.
@@ -106,11 +107,21 @@ def freeze_all_but_last_gate(reg: TabDPTRegressor) -> tuple[torch.nn.Parameter, 
     gate = get_last_layer_gate_param(reg)
     gate.requires_grad_(True)
     tunable_params: list[torch.nn.Parameter] = [gate]
-    for linear in last_block.text_attn_linears:
-        for p in linear.parameters():
+    for text_mlp in last_block.text_attn_linears:
+        for p in text_mlp.parameters():
             p.requires_grad_(True)
             tunable_params.append(p)
     return gate, tunable_params
+
+
+def _linear_layers(module: torch.nn.Module) -> list[tuple[str, torch.nn.Linear]]:
+    if isinstance(module, torch.nn.Linear):
+        return [("linear", module)]
+    return [
+        (name, child)
+        for name, child in module.named_modules()
+        if name and isinstance(child, torch.nn.Linear)
+    ]
 
 
 def gate_stats(gate_logits: torch.Tensor) -> str:
@@ -129,28 +140,23 @@ def gate_stats(gate_logits: torch.Tensor) -> str:
     )
 
 
-def get_trainining_info(reg: TabDPTRegressor, gate_logits: torch.Tensor) -> str:
-    """Compact one-line summary for the gate and last block text linear params."""
+def get_training_info(reg: TabDPTRegressor, gate_logits: torch.Tensor) -> str:
+    """Compact one-line summary for the gate and last block text-attention MLP params."""
     last_block = reg.model.transformer_encoder[-1]
     summaries: list[str] = []
-    for idx, proj in enumerate(last_block.text_attn_linears):
-        # Support both plain nn.Linear and nn.Sequential(Linear, GELU, ...).
-        linear = proj
-        if not hasattr(linear, "weight"):
-            linear = next((m for m in proj.modules() if isinstance(m, torch.nn.Linear)), None)
-            if linear is None:
-                summaries.append(f"L{idx}(no-linear)")
-                continue
-
-        weight = linear.weight.detach().float().cpu().reshape(-1)
-        w_val = weight.item() if weight.numel() == 1 else weight.mean().item()
-        line = f"L{idx}(w={w_val:.3f}"
-        if linear.bias is not None:
-            bias = linear.bias.detach().float().cpu().reshape(-1)
-            b_val = bias.item() if bias.numel() == 1 else bias.mean().item()
-            line += f", b={b_val:.3f}"
-        line += ")"
-        summaries.append(line)
+    for idx, text_mlp in enumerate(last_block.text_attn_linears):
+        layer_summaries: list[str] = []
+        for layer_name, linear in _linear_layers(text_mlp):
+            weight = linear.weight.detach().float().cpu().reshape(-1)
+            layer_summary = f"{layer_name}:w_mean={weight.mean().item():.3f}"
+            if linear.bias is not None:
+                bias = linear.bias.detach().float().cpu().reshape(-1)
+                layer_summary += f",b_mean={bias.mean().item():.3f}"
+            layer_summaries.append(layer_summary)
+        if not layer_summaries:
+            summaries.append(f"H{idx}(no-linear)")
+            continue
+        summaries.append(f"H{idx}({'; '.join(layer_summaries)})")
     return f"gate: {gate_stats(gate_logits)} | {' '.join(summaries)}"
 
 
@@ -170,6 +176,16 @@ def _normalized_regression_loss(
     if loss_type == "l2":
         return torch.nn.functional.mse_loss(y_pred_norm, y_true_norm)
     raise ValueError(f"Unsupported tuning loss_type: {loss_type!r}. Expected 'l1' or 'l2'.")
+
+
+def compute_gradient_norm(params: list[torch.nn.Parameter]) -> float:
+    """Compute the L2 norm of all gradients across trainable parameters."""
+    total_norm = 0.0
+    for p in params:
+        if p.grad is not None:
+            total_norm += float(torch.norm(p.grad).cpu().item()) ** 2
+    return float(np.sqrt(total_norm))
+
 
 def fine_tune_external_gate(
     reg: TabDPTRegressor,
@@ -209,7 +225,10 @@ def fine_tune_external_gate(
         optimizer.train()
 
     num_steps = int(np.ceil(len(y_tune) / tuning_cfg.tune_batch_size))
+    best_loss = float("inf")
     for epoch in range(1, tuning_cfg.epochs + 1):
+        epoch_separator = "=" * 24
+        print(f"\n{epoch_separator} Epoch {epoch:02d}/{tuning_cfg.epochs:02d} {epoch_separator}")
         for step_idx in range(num_steps):
             optimizer.zero_grad()
 
@@ -286,22 +305,26 @@ def fine_tune_external_gate(
             if (step_idx + 1) % tuning_cfg.step_log_every == 0 or step_idx == num_steps - 1:
                 preds_np = preds.detach().cpu().numpy()
                 avg_loss = loss_sum / current_batch_size
+                best_loss = min(best_loss, avg_loss)
                 mse = mean_squared_error(y_target.detach().cpu().numpy(), preds_np)
                 rmse = float(np.sqrt(mse))
                 mae = mean_absolute_error(y_target.detach().cpu().numpy(), preds_np)
+                grad_norm = compute_gradient_norm(tunable_params)
                 print(
                     f"Epoch {epoch:02d} Step {step_idx+1:03d}/{num_steps} "
-                    f"| Loss: {avg_loss:.4f} | MAE: {mae:.4f} | RMSE: {rmse:.4f}"
+                    f"| Loss: {avg_loss:.4f} | BestLoss: {best_loss:.4f} "
+                    f"| MAE: {mae:.4f} | RMSE: {rmse:.4f} | GradNorm: {grad_norm:.6f}"
                 )
         if tuning_cfg.log_text_mixing_params:
             print(
                 f"Epoch {epoch:02d} text-mixing params | "
-                f"{get_trainining_info(reg, gate)}"
+                f"{get_training_info(reg, gate)}"
             )
+        print(f"Epoch {epoch:02d} best loss so far | BestLoss: {best_loss:.4f}")
         if tuning_cfg.eval_each_epoch:
             if X_eval_proc is None or y_eval is None or text_eval is None:
                 raise ValueError("EVAL_EACH_EPOCH requires X_eval_proc, y_eval, and text_eval.")
-            print(f"\n== Eval after epoch {epoch:02d} ==")
+            print(f"\n{'=' * 18} Eval after epoch {epoch:02d} {'=' * 18}")
             # Rolling tune-split evaluation: predict tune points with text attention using only pre-tune context.
             evaluate_rolling(
                 reg,
@@ -332,6 +355,7 @@ def fine_tune_external_gate(
                 label="Eval (with text attn)",
                 max_context=tuning_cfg.max_context_for_eval,
             )
+        print(f"{'=' * 64}\n")
 
     for p in reg.model.parameters():
         p.requires_grad_(False)
@@ -466,7 +490,7 @@ def main() -> None:
         )
         print(
             "Initial text-mixing params:",
-            get_trainining_info(reg, get_last_layer_gate_param(reg)),
+            get_training_info(reg, get_last_layer_gate_param(reg)),
         )
     else:
         print("Initial text-mixing gate:", gate_stats(get_last_layer_gate_param(reg)))
@@ -524,7 +548,7 @@ def main() -> None:
         )
         print(
             "Tuned text-mixing params:",
-            get_trainining_info(reg, get_last_layer_gate_param(reg)),
+            get_training_info(reg, get_last_layer_gate_param(reg)),
         )
     else:
         print("Tuned text-mixing gate:", gate_stats(get_last_layer_gate_param(reg)))

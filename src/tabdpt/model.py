@@ -148,24 +148,27 @@ class TransformerEncoderLayer(nn.Module):
         self.k_norm = LayerNorm(self.head_dim)
 
         if text_enhanced:
-            # one alpha for all heads
-            # self.alpha = nn.Parameter(torch.zeros(1))
-            # Per-head gating parameter: one alpha per attention head
-            # initialize gating value =0.5
-            self.alpha = nn.Parameter(torch.zeros(num_heads))
-
-            # initialize gating value roughly to 1
             # Initialize to a large positive logit so sigmoid(alpha) starts ~1.0.
             self.alpha = nn.Parameter(torch.full((num_heads,), 10.0))
-            # One per-head projection for text attention logits: Linear -> GELU.
+            self.text_attn_hidden_dim = 8
+            # One per-head MLP for text attention logits.
             self.text_attn_linears = nn.ModuleList(
-                [nn.Sequential(nn.Linear(1, 1), nn.GELU()) for _ in range(num_heads)]
+                [
+                    nn.Sequential(
+                        nn.Linear(1, self.text_attn_hidden_dim),
+                        nn.GELU(),
+                        nn.Linear(self.text_attn_hidden_dim, 1),
+                    )
+                    for _ in range(num_heads)
+                ]
             )
             
             with torch.no_grad():
                 for proj in self.text_attn_linears:
                     proj[0].weight.fill_(1.0)
                     proj[0].bias.zero_()
+                    proj[2].weight.fill_(1.0 / float(self.text_attn_hidden_dim))
+                    proj[2].bias.zero_()
             
             # self.register_buffer('ts_gating_val', torch.ones(1))
 
