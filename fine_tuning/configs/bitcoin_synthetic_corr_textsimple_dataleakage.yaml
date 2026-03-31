@@ -1,9 +1,9 @@
 data_path: data/processed_data/bitcoin_synthetic_data_corr_textsimple.csv
 date_column: Date
 numeric_features:
-- text_signal_lag1
-- text_signal_lag2
-- text_signal_lag3
+- direction_lag1
+- direction_lag2
+- direction_lag3
 - target_lag1
 - target_lag2
 - target_lag3
