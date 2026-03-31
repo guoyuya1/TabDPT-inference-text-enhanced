@@ -52,7 +52,7 @@ class TabDPTModel(nn.Module):
         y_src: torch.Tensor,
         task: Literal["cls", "reg"],  # classification or regression
         text_enhanced_attn_weight: torch.Tensor | None = None,
-    ) -> torch.Tensor:
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         x_src = x_src.transpose(0, 1)
         y_src = y_src.squeeze(-1).transpose(0, 1)
         eval_pos = y_src.shape[0]
@@ -90,6 +90,7 @@ class TabDPTModel(nn.Module):
 
         if task == "reg":
             pred = pred * std_y + mean_y
+            return pred, std_y, mean_y
 
         return pred
 

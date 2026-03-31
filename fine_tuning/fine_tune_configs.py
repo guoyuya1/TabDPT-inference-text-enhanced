@@ -28,6 +28,7 @@ class TuningConfig:
     debug_text_effect: bool
     log_text_mixing_params: bool
     step_log_every: int
+    loss_type: str = "l1"
 
 
 @dataclass(frozen=True)
