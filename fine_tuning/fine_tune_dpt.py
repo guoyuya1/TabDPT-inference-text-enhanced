@@ -28,12 +28,12 @@ from tabdpt import TabDPTRegressor
 from tabdpt.utils import pad_x
 
 try:
-    from .eval_fine_tune import _format_metrics, evaluate_rolling
+    from .eval_fine_tune import _format_metrics, evaluate_rolling, evaluate_rolling_pca
     from .fine_tune_configs import TuningConfig, load_fine_tune_config
     from .load_dataset import load_tabular_text_dataset
     from .split_ts import time_split
 except ImportError:
-    from eval_fine_tune import _format_metrics, evaluate_rolling
+    from eval_fine_tune import _format_metrics, evaluate_rolling, evaluate_rolling_pca
     from fine_tune_configs import TuningConfig, load_fine_tune_config
     from load_dataset import load_tabular_text_dataset
     from split_ts import time_split
@@ -456,6 +456,28 @@ def main() -> None:
         label="Eval (with text attn)",
         max_context=run_cfg.tuning.max_context_for_eval,
     )
+    baseline_pca_tune = evaluate_rolling_pca(
+        reg,
+        X_context_proc=X_context_proc,
+        y_context=y_context,
+        text_context=text_context,
+        X_eval_proc=X_tune_proc,
+        y_eval=y_tune,
+        text_eval=text_tune,
+        label="Tune(text with PCA)",
+        max_context=run_cfg.tuning.max_context_for_tune_eval,
+    )
+    baseline_pca_eval = evaluate_rolling_pca(
+        reg,
+        X_context_proc=eval_context_proc,
+        y_context=eval_y_context,
+        text_context=eval_text_context,
+        X_eval_proc=X_eval_proc,
+        y_eval=y_eval,
+        text_eval=text_eval,
+        label="Eval(text with PCA)",
+        max_context=run_cfg.tuning.max_context_for_eval,
+    )
     if run_cfg.tuning.debug_text_effect:
         delta_mae = baseline_text_eval[0] - baseline_no_text_eval[0]
         delta_rmse = baseline_text_eval[1] - baseline_no_text_eval[1]
@@ -488,6 +510,7 @@ def main() -> None:
 
     print("\n== After tuning ==")
     _format_metrics("Tune (no text attn)", *baseline_no_text_tune)
+    _format_metrics("Tune(text with PCA)", *baseline_pca_tune)
     evaluate_rolling(
         reg,
         X_context_proc=X_context_proc,
@@ -501,6 +524,7 @@ def main() -> None:
         max_context=run_cfg.tuning.max_context_for_tune_eval,
     )
     _format_metrics("Eval (no text attn)", *baseline_no_text_eval)
+    _format_metrics("Eval(text with PCA)", *baseline_pca_eval)
     tuned_no_text_eval = baseline_no_text_eval
     tuned_text_eval = evaluate_rolling(
         reg,
