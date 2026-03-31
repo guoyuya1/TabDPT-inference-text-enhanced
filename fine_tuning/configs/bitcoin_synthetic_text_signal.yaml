@@ -30,10 +30,10 @@ embedding_columns:
 - embedding_summary_gpt-5-mini_lag3
 embedding_column_template: null
 seed: 0
-max_rows: 100
-context_ratio: 0.5
-tune_ratio: 0.4
-eval_ratio: 0.1
+max_rows: 1000
+context_ratio: 0.2
+tune_ratio: 0.65
+eval_ratio: 0.15
 model:
   device: auto
   model_weight_path: null
@@ -41,8 +41,8 @@ model:
   use_flash: true
   compile_model: true
 tuning:
-  epochs: 40
-  gate_lr: 0.5
+  epochs: 2000
+  gate_lr: 0.01
   gate_logit_clamp: 10.0
   tune_batch_size: 650
   max_context_for_tune: 1000

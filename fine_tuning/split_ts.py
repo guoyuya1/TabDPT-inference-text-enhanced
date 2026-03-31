@@ -6,12 +6,12 @@ import numpy as np
 def time_split(
     X: np.ndarray,
     y: np.ndarray,
-    text: np.ndarray,
+    text: np.ndarray | None,
     *,
     context_ratio: float,
     tune_ratio: float,
     eval_ratio: float,
-) -> tuple[np.ndarray, ...]:
+) -> tuple[np.ndarray | None, ...]:
     """
     Split sequentially into context / tune / eval based on ratios.
 
@@ -30,13 +30,16 @@ def time_split(
     if n_context <= 0 or n_tune <= 0 or n_eval <= 0:
         raise ValueError(f"Invalid split sizes: n={n}, context={n_context}, tune={n_tune}, eval={n_eval}")
 
-    X_context, y_context, text_context = X[:n_context], y[:n_context], text[:n_context]
-    X_tune, y_tune, text_tune = (
-        X[n_context : n_context + n_tune],
-        y[n_context : n_context + n_tune],
-        text[n_context : n_context + n_tune],
-    )
-    X_eval, y_eval, text_eval = X[n_context + n_tune :], y[n_context + n_tune :], text[n_context + n_tune :]
+    if text is None:
+        text_context = text_tune = text_eval = None
+    else:
+        text_context = text[:n_context]
+        text_tune = text[n_context : n_context + n_tune]
+        text_eval = text[n_context + n_tune :]
+
+    X_context, y_context = X[:n_context], y[:n_context]
+    X_tune, y_tune = X[n_context : n_context + n_tune], y[n_context : n_context + n_tune]
+    X_eval, y_eval = X[n_context + n_tune :], y[n_context + n_tune :]
 
     return (
         X_context,

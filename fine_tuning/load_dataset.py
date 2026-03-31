@@ -12,6 +12,65 @@ def _parse_embedding_column(series: pd.Series) -> np.ndarray:
     return np.stack(parsed, axis=0)
 
 
+def _load_sorted_dataframe(
+    *,
+    path: str,
+    date_column: str | None,
+    max_rows: int | None,
+) -> pd.DataFrame:
+    df = pd.read_csv(path)
+
+    # Sort by date to make chronological splits meaningful.
+    if date_column and date_column in df.columns:
+        df[date_column] = pd.to_datetime(df[date_column])
+        df = df.sort_values(date_column).reset_index(drop=True)
+
+    if max_rows is not None:
+        df = df.head(max_rows).reset_index(drop=True)
+
+    return df
+
+
+def _extract_numeric_target(
+    df: pd.DataFrame,
+    *,
+    path: str,
+    numeric_features: list[str],
+    target_column: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    for col in [*numeric_features, target_column]:
+        if col not in df.columns:
+            raise ValueError(f"Missing required column '{col}' in {path}")
+
+    X = df[numeric_features].astype(np.float32).to_numpy()
+    y = df[target_column].astype(np.float32).to_numpy()
+    return X, y
+
+
+def load_tabular_dataset(
+    *,
+    path: str,
+    date_column: str | None,
+    numeric_features: list[str],
+    target_column: str,
+    max_rows: int | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Load numeric features + target without any text embeddings.
+
+    Returns:
+    - X: (N, F) numeric features
+    - y: (N,) target
+    """
+    df = _load_sorted_dataframe(path=path, date_column=date_column, max_rows=max_rows)
+    return _extract_numeric_target(
+        df,
+        path=path,
+        numeric_features=numeric_features,
+        target_column=target_column,
+    )
+
+
 def load_tabular_text_dataset(
     *,
     path: str,
@@ -31,22 +90,13 @@ def load_tabular_text_dataset(
     - y: (N,) target
     - text: (N, L, D) text embeddings (lags are treated as separate text features)
     """
-    df = pd.read_csv(path)
-
-    # Sort by date to make chronological splits meaningful.
-    if date_column and date_column in df.columns:
-        df[date_column] = pd.to_datetime(df[date_column])
-        df = df.sort_values(date_column).reset_index(drop=True)
-
-    if max_rows is not None:
-        df = df.head(max_rows).reset_index(drop=True)
-
-    for col in [*numeric_features, target_column]:
-        if col not in df.columns:
-            raise ValueError(f"Missing required column '{col}' in {path}")
-
-    X = df[numeric_features].astype(np.float32).to_numpy()
-    y = df[target_column].astype(np.float32).to_numpy()
+    df = _load_sorted_dataframe(path=path, date_column=date_column, max_rows=max_rows)
+    X, y = _extract_numeric_target(
+        df,
+        path=path,
+        numeric_features=numeric_features,
+        target_column=target_column,
+    )
 
     if embedding_columns is not None:
         embedding_cols = embedding_columns
