@@ -40,6 +40,23 @@ Once the dataset is joined and embedding vecotrs are created, the joining and em
 1. `data/scripts/create_embeddings_with_lags.py`
 2. `fine_tuning/fine_tune_dpt.py`
 
+## Source Data
+v1: concise summary of search facts with at most two sentences.
+
+V1:  highly concise summary of search facts with one sentence. （gpt5.2）
+MultimodalForcast/data/energy/Energy_with_text_summarized_concise.csv
+
+
+
+V2: [Notable Increase], [Notable Drop], or [No Notable Change] followed by one sentence as analysis （gpt5.2）
+MultimodalForcast/data/energy/Energy_with_text_gpt_analyzed_concise.csv
+
+
+
+V3: exactly one of the following labels: [Notable Increase], [Notable Drop], or [No Notable Change] （gpt5.2）
+
+MultimodalForcast/data/energy/Energy_with_text_gpt_analyzed_baseline.csv
+
 ## Create Embeddings With Lags
 
 Use `data/scripts/create_embeddings_with_lags.py` to:

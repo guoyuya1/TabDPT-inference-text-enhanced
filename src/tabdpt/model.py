@@ -149,8 +149,8 @@ class TransformerEncoderLayer(nn.Module):
 
         if text_enhanced:
             # Initialize to a large positive logit so sigmoid(alpha) starts ~1.0.
-            self.alpha = nn.Parameter(torch.full((num_heads,), 10.0))
-            self.text_attn_hidden_dim = 8
+            self.alpha = nn.Parameter(torch.full((num_heads,), 0.0))
+            self.text_attn_hidden_dim = 512
             # One per-head MLP for text attention logits.
             self.text_attn_linears = nn.ModuleList(
                 [
@@ -165,10 +165,10 @@ class TransformerEncoderLayer(nn.Module):
             
             with torch.no_grad():
                 for proj in self.text_attn_linears:
-                    proj[0].weight.fill_(1.0)
-                    proj[0].bias.zero_()
-                    proj[2].weight.fill_(1.0 / float(self.text_attn_hidden_dim))
-                    proj[2].bias.zero_()
+                    nn.init.xavier_uniform_(proj[0].weight)
+                    nn.init.zeros_(proj[0].bias)
+                    nn.init.xavier_uniform_(proj[2].weight)
+                    nn.init.zeros_(proj[2].bias)
             
             # self.register_buffer('ts_gating_val', torch.ones(1))
 
