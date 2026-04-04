@@ -21,6 +21,76 @@ def _compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> tuple[float, flo
     return mae, rmse, mape
 
 
+def _available_history_counts(fixed_context_len: int, step_idx: int, horizon: int) -> tuple[int, int]:
+    """
+    Count which labels are known at a rolling prediction step for a direct horizon model.
+
+    For horizon h, row t predicts timestamp t+h-1, so when forecasting row `step_idx`
+    in the rolling window, the last h-1 rows immediately before it still do not have
+    observed targets. Those rows are therefore excluded from the training context until
+    later steps.
+    """
+    if horizon < 1:
+        raise ValueError(f"horizon must be >= 1, got {horizon}")
+
+    unavailable_fixed_tail = max(0, horizon - 1 - step_idx)
+    fixed_count = max(0, fixed_context_len - unavailable_fixed_tail)
+    rolling_count = max(0, step_idx - (horizon - 1))
+    return fixed_count, rolling_count
+
+
+def _build_rolling_train_step(
+    *,
+    X_context_proc: np.ndarray,
+    y_context: np.ndarray,
+    text_context: np.ndarray | None,
+    X_eval_proc: np.ndarray,
+    y_eval: np.ndarray,
+    text_eval: np.ndarray | None,
+    idx: int,
+    horizon: int,
+    max_context: int | None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+    fixed_count, rolling_count = _available_history_counts(len(y_context), idx, horizon)
+
+    x_parts: list[np.ndarray] = []
+    y_parts: list[np.ndarray] = []
+    text_parts: list[np.ndarray] = []
+
+    if fixed_count > 0:
+        x_parts.append(X_context_proc[:fixed_count])
+        y_parts.append(y_context[:fixed_count])
+        if text_context is not None:
+            text_parts.append(text_context[:fixed_count])
+
+    if rolling_count > 0:
+        x_parts.append(X_eval_proc[:rolling_count])
+        y_parts.append(y_eval[:rolling_count])
+        if text_eval is not None:
+            text_parts.append(text_eval[:rolling_count])
+
+    if not x_parts:
+        raise ValueError(
+            "No known context rows are available for this rolling step. "
+            "Increase context_ratio or reduce prediction_window."
+        )
+
+    X_train_step = x_parts[0] if len(x_parts) == 1 else np.concatenate(x_parts, axis=0)
+    y_train_step = y_parts[0] if len(y_parts) == 1 else np.concatenate(y_parts, axis=0)
+    if text_context is None and text_eval is None:
+        text_train_step = None
+    else:
+        text_train_step = text_parts[0] if len(text_parts) == 1 else np.concatenate(text_parts, axis=0)
+
+    if max_context is not None:
+        X_train_step = X_train_step[-max_context:]
+        y_train_step = y_train_step[-max_context:]
+        if text_train_step is not None:
+            text_train_step = text_train_step[-max_context:]
+
+    return X_train_step, y_train_step, text_train_step
+
+
 def _append_text_pca_features(
     *,
     X_train_step: np.ndarray,
@@ -158,13 +228,15 @@ def evaluate_rolling(
     use_text: bool,
     label: str,
     max_context: int | None,
+    horizon: int = 1,
 ) -> tuple[float, float, float]:
     """
     Rolling evaluation with a fixed context and a sequential eval window.
 
-    X_context_proc must contain all rows before the first eval row. If max_context
-    is set, the model trains on only the last max_context rows of the rolling
-    train window.
+    X_context_proc must contain all rows before the first eval row. For horizon
+    h>1, the last h-1 rows immediately before each prediction are withheld until
+    their targets become observable. If max_context is set, the model trains on
+    only the last max_context known rows of the rolling train window.
     """
     if use_text and (text_context is None or text_eval is None):
         raise ValueError("Rolling eval with text requires context and eval text arrays.")
@@ -173,21 +245,17 @@ def evaluate_rolling(
     preds = np.zeros(len(y_eval), dtype=np.float32)
     with torch.no_grad():
         for idx in range(len(y_eval)):
-            X_train_full = np.concatenate((X_context_proc, X_eval_proc[:idx]))
-            y_train_full = np.concatenate((y_context, y_eval[:idx]))
-            if use_text:
-                text_train_full = np.concatenate((text_context, text_eval[:idx]), axis=0)
-
-            if max_context is not None:
-                X_train_step = X_train_full[-max_context:]
-                y_train_step = y_train_full[-max_context:]
-                if use_text:
-                    text_train_step = text_train_full[-max_context:]
-            else:
-                X_train_step = X_train_full
-                y_train_step = y_train_full
-                if use_text:
-                    text_train_step = text_train_full
+            X_train_step, y_train_step, text_train_step = _build_rolling_train_step(
+                X_context_proc=X_context_proc,
+                y_context=y_context,
+                text_context=text_context if use_text else None,
+                X_eval_proc=X_eval_proc,
+                y_eval=y_eval,
+                text_eval=text_eval if use_text else None,
+                idx=idx,
+                horizon=horizon,
+                max_context=max_context,
+            )
 
             X_test_step = X_eval_proc[idx:idx + 1]
 
@@ -232,6 +300,7 @@ def evaluate_rolling_pca(
     text_eval: np.ndarray,
     label: str,
     max_context: int | None,
+    horizon: int = 1,
     max_total_features: int = 100,
 ) -> tuple[float, float, float]:
     """
@@ -248,18 +317,17 @@ def evaluate_rolling_pca(
 
     with torch.no_grad():
         for idx in range(len(y_eval)):
-            X_train_full = np.concatenate((X_context_proc, X_eval_proc[:idx]))
-            y_train_full = np.concatenate((y_context, y_eval[:idx]))
-            text_train_full = np.concatenate((text_context, text_eval[:idx]), axis=0)
-
-            if max_context is not None:
-                X_train_step = X_train_full[-max_context:]
-                y_train_step = y_train_full[-max_context:]
-                text_train_step = text_train_full[-max_context:]
-            else:
-                X_train_step = X_train_full
-                y_train_step = y_train_full
-                text_train_step = text_train_full
+            X_train_step, y_train_step, text_train_step = _build_rolling_train_step(
+                X_context_proc=X_context_proc,
+                y_context=y_context,
+                text_context=text_context,
+                X_eval_proc=X_eval_proc,
+                y_eval=y_eval,
+                text_eval=text_eval,
+                idx=idx,
+                horizon=horizon,
+                max_context=max_context,
+            )
 
             X_test_step = X_eval_proc[idx:idx + 1]
             text_test_step = text_eval[idx:idx + 1]
@@ -305,6 +373,7 @@ def evaluate_rolling_truncate_text(
     text_eval: np.ndarray,
     label: str,
     max_context: int | None,
+    horizon: int = 1,
     max_total_features: int = 100,
 ) -> tuple[tuple[float, float, float], str] | None:
     """
@@ -335,18 +404,17 @@ def evaluate_rolling_truncate_text(
 
     with torch.no_grad():
         for idx in range(len(y_eval)):
-            X_train_full = np.concatenate((X_context_proc, X_eval_proc[:idx]))
-            y_train_full = np.concatenate((y_context, y_eval[:idx]))
-            text_train_full = np.concatenate((text_context, text_eval[:idx]), axis=0)
-
-            if max_context is not None:
-                X_train_step = X_train_full[-max_context:]
-                y_train_step = y_train_full[-max_context:]
-                text_train_step = text_train_full[-max_context:]
-            else:
-                X_train_step = X_train_full
-                y_train_step = y_train_full
-                text_train_step = text_train_full
+            X_train_step, y_train_step, text_train_step = _build_rolling_train_step(
+                X_context_proc=X_context_proc,
+                y_context=y_context,
+                text_context=text_context,
+                X_eval_proc=X_eval_proc,
+                y_eval=y_eval,
+                text_eval=text_eval,
+                idx=idx,
+                horizon=horizon,
+                max_context=max_context,
+            )
 
             X_test_step = X_eval_proc[idx:idx + 1]
             text_test_step = text_eval[idx:idx + 1]

@@ -10,43 +10,43 @@ parameters:
 - the per-head `alpha` gate logits
 - the per-head text attention linear layers
 
-Fine-tuning uses rolling one-step prediction on the tune split, so each target
-row only sees past rows as context. The script prints baseline and post-tuning
-rolling metrics, with optional per-epoch text-mixing parameter summaries.
+Fine-tuning uses rolling direct forecasting on the tune split. For
+`prediction_window > 1`, the script trains one model per horizon and each model
+only sees labels that would already be known at that timestamp. The script
+prints baseline and post-tuning rolling metrics, with optional per-epoch
+text-mixing parameter summaries.
 """
 
 from __future__ import annotations
 
 import argparse
+import sys
+from pathlib import Path
 
 import numpy as np
 import schedulefree  # type: ignore
 import torch
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = PROJECT_ROOT / "src"
+for path in (PROJECT_ROOT, SRC_ROOT):
+    path_str = str(path)
+    if path_str not in sys.path:
+        sys.path.insert(0, path_str)
+
+from fine_tuning.eval_fine_tune import (
+    _build_rolling_train_step,
+    _format_metrics,
+    evaluate_rolling,
+    evaluate_rolling_pca,
+    evaluate_rolling_truncate_text,
+)
+from fine_tuning.fine_tune_configs import TuningConfig, load_fine_tune_config
+from fine_tuning.load_dataset import build_direct_multi_horizon_dataset, load_tabular_text_dataset
+from fine_tuning.split_ts import time_split
 from tabdpt import TabDPTRegressor
 from tabdpt.utils import pad_x
-
-try:
-    from .eval_fine_tune import (
-        _format_metrics,
-        evaluate_rolling,
-        evaluate_rolling_pca,
-        evaluate_rolling_truncate_text,
-    )
-    from .fine_tune_configs import TuningConfig, load_fine_tune_config
-    from .load_dataset import load_tabular_text_dataset
-    from .split_ts import time_split
-except ImportError:
-    from eval_fine_tune import (
-        _format_metrics,
-        evaluate_rolling,
-        evaluate_rolling_pca,
-        evaluate_rolling_truncate_text,
-    )
-    from fine_tune_configs import TuningConfig, load_fine_tune_config
-    from load_dataset import load_tabular_text_dataset
-    from split_ts import time_split
 
 
 def load_tabdpt_regressor(
@@ -194,6 +194,7 @@ def fine_tune_external_gate(
     X_eval_proc: np.ndarray | None = None,
     y_eval: np.ndarray | None = None,
     text_eval: np.ndarray | None = None,
+    horizon: int = 1,
 ) -> None:
     """
     Fine-tune only the last layer's text-mixing parameters.
@@ -205,8 +206,9 @@ def fine_tune_external_gate(
         - text similarity attention via `_compute_attn_weight_pairwise_avg(...)`
 
     Rolling window (per step inside each epoch):
-    - Fixed context = global context + tune rows before this batch
-    - Within the batch, each row is predicted from base context plus earlier batch rows
+    - Fixed context = chronological context rows before the tune split
+    - Earlier tune rows are only added once their future targets are observable
+      for this horizon
     - Gradients are accumulated point-by-point and averaged over the batch
     """
     gate, tunable_params = freeze_all_but_last_gate(reg)
@@ -231,21 +233,17 @@ def fine_tune_external_gate(
             loss_sum = 0.0
 
             for point_idx in range(start, end):
-                X_point_context = np.concatenate((X_context_proc, X_tune_proc[:point_idx]))
-                y_point_context = np.concatenate((y_context, y_tune[:point_idx]))
-                text_point_context = np.concatenate((text_context, text_tune[:point_idx]), axis=0)
-                # When max_context_for_tune is set, each tuning step only sees the most recent
-                # rows from the accumulated context so training matches a fixed rolling window.
-                if tuning_cfg.max_context_for_tune is not None:
-                    X_context_step = X_point_context[-tuning_cfg.max_context_for_tune:]
-                    y_context_step = y_point_context[-tuning_cfg.max_context_for_tune:]
-                    text_context_step = text_point_context[-tuning_cfg.max_context_for_tune:]
-                # Otherwise, each step uses the full available history: the original context
-                # plus every earlier tune row before the current prediction target.
-                else:
-                    X_context_step = X_point_context
-                    y_context_step = y_point_context
-                    text_context_step = text_point_context
+                X_context_step, y_context_step, text_context_step = _build_rolling_train_step(
+                    X_context_proc=X_context_proc,
+                    y_context=y_context,
+                    text_context=text_context,
+                    X_eval_proc=X_tune_proc,
+                    y_eval=y_tune,
+                    text_eval=text_tune,
+                    idx=point_idx,
+                    horizon=horizon,
+                    max_context=tuning_cfg.max_context_for_tune,
+                )
 
                 train_text_batch = text_context_step[None, ...]
                 test_text_batch = text_tune[point_idx:point_idx + 1][None, ...]
@@ -324,6 +322,7 @@ def fine_tune_external_gate(
                 use_text=True,
                 label="Tune (with text attn)",
                 max_context=tuning_cfg.max_context_for_tune_eval,
+                horizon=horizon,
             )
             # Build eval-time context by appending the full tune segment, so eval predictions only use past rows.
             eval_context_proc = np.concatenate((X_context_proc, X_tune_proc))
@@ -341,6 +340,7 @@ def fine_tune_external_gate(
                 use_text=True,
                 label="Eval (with text attn)",
                 max_context=tuning_cfg.max_context_for_eval,
+                horizon=horizon,
             )
 
     for p in reg.model.parameters():
@@ -348,53 +348,38 @@ def fine_tune_external_gate(
 
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Fine-tune last-layer text-mixing parameters on a configured dataset.")
-    parser.add_argument("--dataset", help="Dataset key in the config file.")
-    parser.add_argument("--config", required=True, help="Path to dataset config YAML.")
-    args = parser.parse_args()
+def _initial_known_context_count(context_len: int, horizon: int) -> int:
+    known_count = context_len - horizon + 1
+    if known_count <= 0:
+        raise ValueError(
+            "Not enough context rows for this prediction horizon. "
+            f"context_len={context_len}, horizon={horizon}. "
+            "Increase context_ratio or reduce prediction_window."
+        )
+    return known_count
 
-    run_cfg = load_fine_tune_config(args.config, args.dataset)
-    torch.manual_seed(run_cfg.seed)
-    np.random.seed(run_cfg.seed)
 
-    if args.dataset:
-        print(f"Using dataset '{args.dataset}' from {args.config}")
-    else:
-        print(f"Using dataset config {args.config}")
+def _run_single_horizon(
+    *,
+    run_cfg,
+    horizon: int,
+    X_context: np.ndarray,
+    Y_context: np.ndarray,
+    text_context: np.ndarray,
+    X_tune: np.ndarray,
+    Y_tune: np.ndarray,
+    text_tune: np.ndarray,
+    X_eval: np.ndarray,
+    Y_eval: np.ndarray,
+    text_eval: np.ndarray,
+) -> None:
+    y_context = Y_context[:, horizon - 1]
+    y_tune = Y_tune[:, horizon - 1]
+    y_eval = Y_eval[:, horizon - 1]
+    initial_context_count = _initial_known_context_count(len(y_context), horizon)
 
-    X, y, text = load_tabular_text_dataset(
-        path=run_cfg.data_path,
-        date_column=run_cfg.date_column,
-        numeric_features=run_cfg.numeric_features,
-        target_column=run_cfg.target_column,
-        embedding_lags=run_cfg.embedding_lags,
-        embedding_columns=run_cfg.embedding_columns,
-        embedding_column_template=run_cfg.embedding_column_template,
-        max_rows=run_cfg.max_rows,
-    )
-    if X.shape[1] == 0:
-        X = np.zeros((X.shape[0], 1), dtype=np.float32)
-
-    (
-        X_context,
-        y_context,
-        text_context,
-        X_tune,
-        y_tune,
-        text_tune,
-        X_eval,
-        y_eval,
-        text_eval,
-    ) = time_split(
-        X,
-        y,
-        text,
-        context_ratio=run_cfg.context_ratio,
-        tune_ratio=run_cfg.tune_ratio,
-        eval_ratio=run_cfg.eval_ratio,
-    )
-    print(f"Split sizes: context={len(y_context)} tune={len(y_tune)} eval={len(y_eval)}")
+    print(f"\n== Horizon {horizon}/{run_cfg.prediction_window} ==")
+    print(f"Known context rows at first tune step: {initial_context_count}/{len(y_context)}")
 
     reg = load_tabdpt_regressor(
         device=run_cfg.model.device,
@@ -403,7 +388,11 @@ def main() -> None:
         use_flash=run_cfg.model.use_flash,
         compile_model=run_cfg.model.compile_model,
     )
-    reg.fit(X_context, y_context, text_context)
+    reg.fit(
+        X_context[:initial_context_count],
+        y_context[:initial_context_count],
+        text_context[:initial_context_count],
+    )
 
     reduction_mode = None
     reduction_payload = None
@@ -438,6 +427,7 @@ def main() -> None:
         use_text=False,
         label="Tune (no text attn)",
         max_context=run_cfg.tuning.max_context_for_tune_eval,
+        horizon=horizon,
     )
     eval_context_proc = np.concatenate((X_context_proc, X_tune_proc))
     eval_y_context = np.concatenate((y_context, y_tune))
@@ -453,6 +443,7 @@ def main() -> None:
         use_text=False,
         label="Eval (no text attn)",
         max_context=run_cfg.tuning.max_context_for_eval,
+        horizon=horizon,
     )
     baseline_text_eval = evaluate_rolling(
         reg,
@@ -465,6 +456,7 @@ def main() -> None:
         use_text=True,
         label="Eval (with text attn)",
         max_context=run_cfg.tuning.max_context_for_eval,
+        horizon=horizon,
     )
     baseline_pca_tune = evaluate_rolling_pca(
         reg,
@@ -476,6 +468,7 @@ def main() -> None:
         text_eval=text_tune,
         label="Tune(text with PCA)",
         max_context=run_cfg.tuning.max_context_for_tune_eval,
+        horizon=horizon,
     )
     baseline_pca_eval = evaluate_rolling_pca(
         reg,
@@ -487,6 +480,7 @@ def main() -> None:
         text_eval=text_eval,
         label="Eval(text with PCA)",
         max_context=run_cfg.tuning.max_context_for_eval,
+        horizon=horizon,
     )
     baseline_truncate_tune = evaluate_rolling_truncate_text(
         reg,
@@ -498,6 +492,7 @@ def main() -> None:
         text_eval=text_tune,
         label="Tune(text truncate)",
         max_context=run_cfg.tuning.max_context_for_tune_eval,
+        horizon=horizon,
     )
     baseline_truncate_eval = evaluate_rolling_truncate_text(
         reg,
@@ -509,6 +504,7 @@ def main() -> None:
         text_eval=text_eval,
         label="Eval(text truncate)",
         max_context=run_cfg.tuning.max_context_for_eval,
+        horizon=horizon,
     )
     if run_cfg.tuning.debug_text_effect:
         delta_mae = baseline_text_eval[0] - baseline_no_text_eval[0]
@@ -538,6 +534,7 @@ def main() -> None:
         X_eval_proc=X_eval_proc,
         y_eval=y_eval,
         text_eval=text_eval,
+        horizon=horizon,
     )
 
     print("\n== After tuning ==")
@@ -556,6 +553,7 @@ def main() -> None:
         use_text=True,
         label="Tune (with text attn)",
         max_context=run_cfg.tuning.max_context_for_tune_eval,
+        horizon=horizon,
     )
     _format_metrics("Eval (no text attn)", *baseline_no_text_eval)
     _format_metrics("Eval(text with PCA)", *baseline_pca_eval)
@@ -573,6 +571,7 @@ def main() -> None:
         use_text=True,
         label="Eval (with text attn)",
         max_context=run_cfg.tuning.max_context_for_eval,
+        horizon=horizon,
     )
     if run_cfg.tuning.debug_text_effect:
         delta_mae = tuned_text_eval[0] - tuned_no_text_eval[0]
@@ -588,6 +587,76 @@ def main() -> None:
         )
     else:
         print("Tuned text-mixing gate:", gate_stats(get_last_layer_gate_param(reg)))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Fine-tune last-layer text-mixing parameters on a configured dataset.")
+    parser.add_argument("--config", required=True, help="Path to dataset config YAML.")
+    args = parser.parse_args()
+
+    run_cfg = load_fine_tune_config(args.config, None)
+    torch.manual_seed(run_cfg.seed)
+    np.random.seed(run_cfg.seed)
+
+    print(f"Using dataset config {args.config}")
+
+    X_raw, y_raw, text_raw = load_tabular_text_dataset(
+        path=run_cfg.data_path,
+        date_column=run_cfg.date_column,
+        numeric_features=run_cfg.numeric_features,
+        target_column=run_cfg.target_column,
+        embedding_lags=run_cfg.embedding_lags,
+        embedding_columns=run_cfg.embedding_columns,
+        embedding_column_template=run_cfg.embedding_column_template,
+        max_rows=run_cfg.max_rows,
+    )
+    X, Y_multi, text = build_direct_multi_horizon_dataset(
+        X_raw,
+        y_raw,
+        text_raw,
+        prediction_window=run_cfg.prediction_window,
+    )
+    if X.shape[1] == 0:
+        X = np.zeros((X.shape[0], 1), dtype=np.float32)
+
+    (
+        X_context,
+        Y_context,
+        text_context,
+        X_tune,
+        Y_tune,
+        text_tune,
+        X_eval,
+        Y_eval,
+        text_eval,
+    ) = time_split(
+        X,
+        Y_multi,
+        text,
+        context_ratio=run_cfg.context_ratio,
+        tune_ratio=run_cfg.tune_ratio,
+        eval_ratio=run_cfg.eval_ratio,
+    )
+    print(
+        "Split sizes: "
+        f"context={len(Y_context)} tune={len(Y_tune)} eval={len(Y_eval)} "
+        f"| prediction_window={run_cfg.prediction_window}"
+    )
+
+    for horizon in range(1, run_cfg.prediction_window + 1):
+        _run_single_horizon(
+            run_cfg=run_cfg,
+            horizon=horizon,
+            X_context=X_context,
+            Y_context=Y_context,
+            text_context=text_context,
+            X_tune=X_tune,
+            Y_tune=Y_tune,
+            text_tune=text_tune,
+            X_eval=X_eval,
+            Y_eval=Y_eval,
+            text_eval=text_eval,
+        )
 
 
 if __name__ == "__main__":
