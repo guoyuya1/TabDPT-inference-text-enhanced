@@ -8,6 +8,7 @@ build/
 logs/
 .vscode/
 miscell/
+logs/
 # tests_notebook/
 # Generated experiment artifacts
 results/
