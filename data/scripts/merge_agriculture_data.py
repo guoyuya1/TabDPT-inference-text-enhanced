@@ -12,6 +12,15 @@ def _concat_text(series: pd.Series) -> str:
     return "; ".join(parts) if parts else "NA"
 
 
+def _prefer_lowercase_date(df: pd.DataFrame) -> pd.DataFrame:
+    if "Date" in df.columns and "date" in df.columns:
+        df["date"] = df["date"].where(df["date"].notna(), df["Date"])
+        return df.drop(columns=["Date"])
+    if "Date" in df.columns:
+        return df.rename(columns={"Date": "date"})
+    return df
+
+
 def _read_text_csv(
     path: Path,
     *,
@@ -21,6 +30,7 @@ def _read_text_csv(
 ) -> pd.DataFrame:
     df = pd.read_csv(path)
     df = df.loc[:, ~df.columns.str.contains(r"^Unnamed")]
+    df = _prefer_lowercase_date(df)
 
     if start_date_col not in df.columns:
         raise ValueError(f"Missing start date column '{start_date_col}' in {path}")
@@ -78,6 +88,7 @@ def _merge_with_interval_overlap(
 ) -> pd.DataFrame:
     numeric = pd.read_csv(numeric_path)
     numeric = numeric.loc[:, ~numeric.columns.str.contains(r"^Unnamed")]
+    numeric = _prefer_lowercase_date(numeric)
 
     if numeric_start_date_col not in numeric.columns:
         raise ValueError(
