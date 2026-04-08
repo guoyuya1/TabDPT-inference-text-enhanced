@@ -93,7 +93,7 @@ def _merge_with_interval_overlap(
 
     if min_numeric_start_date is not None:
         min_numeric_start_date = pd.to_datetime(min_numeric_start_date)
-        numeric = numeric[numeric[numeric_start_date_col] > min_numeric_start_date].copy()
+        numeric = numeric[numeric[numeric_start_date_col] >= min_numeric_start_date].copy()
 
     if max_numeric_start_date is not None:
         max_numeric_start_date = pd.to_datetime(max_numeric_start_date)
@@ -165,11 +165,11 @@ def main() -> None:
     parser.add_argument(
         "--min-numeric-start-date",
         default="2000-01-01",
-        help="Keep only numeric rows with start date greater than this value.",
+        help="Keep only numeric rows with start date greater than or equal to this value.",
     )
     parser.add_argument(
         "--max-numeric-start-date",
-        default="2023-12-31",
+        default="2024-01-01",
         help="Keep only numeric rows with start date less than this value.",
     )
     parser.add_argument(

@@ -174,17 +174,17 @@ def main() -> None:
     )
     parser.add_argument(
         "--numeric",
-        default="Time-MMD/numerical/Traffic/Traffic.csv",
+        default="Time-MMD/numerical/Agriculture/Agriculture.csv",
         help="Path to numeric CSV.",
     )
     parser.add_argument(
         "--search",
-        default="Time-MMD/textual/Traffic/Traffic_search.csv",
+        default="Time-MMD/textual/Agriculture/Agriculture_search.csv",
         help="Path to search-summary text CSV.",
     )
     parser.add_argument(
         "--report",
-        default="Time-MMD/textual/Traffic/Traffic_report.csv",
+        default="Time-MMD/textual/Agriculture/Agriculture_report.csv",
         help="Path to report-summary text CSV.",
     )
     parser.add_argument(
@@ -210,7 +210,7 @@ def main() -> None:
     parser.add_argument(
         "-o",
         "--output",
-        default="Time-MMD/numerical/Traffic/Traffic_with_text.csv",
+        default="Time-MMD/numerical/Agriculture/Agriculture_with_text.csv",
         help="Output CSV path.",
     )
     args = parser.parse_args()
