@@ -60,19 +60,17 @@ class TabDPTRegressor(TabDPTEstimator, RegressorMixin):
             X_train = pad_x(train_x[None, :, :], self.max_features).to(self.device)
             X_test = pad_x(test_x[None, :, :], self.max_features).to(self.device)
             
-            # calculate text enhanced attention weight (only if text_enhanced is True)
-            text_enhanced_attn_weight = None
+            text_train_b = text_test_b = None
             if self.text_enhanced and train_text is not None and test_text is not None:
-                # Convert to numpy arrays for the function (it expects numpy arrays)
-                text_enhanced_attn_weight = self._compute_attn_weight_pairwise_avg(train_text, test_text) # (N_train, N_test)
-                text_enhanced_attn_weight = text_enhanced_attn_weight[None, :, :].to(self.device) # (1, N_train, N_test)
+                text_train_b, text_test_b = self.text_embeddings_batched(train_text, test_text)
 
             y_train = train_y[None, :].float()
             pred = self.model(
                 x_src=torch.cat([X_train, X_test], dim=1),
                 y_src=y_train.unsqueeze(-1),
                 task=self.mode,
-                text_enhanced_attn_weight=text_enhanced_attn_weight,
+                text_train=text_train_b,
+                text_test=text_test_b,
             )
             pred, _, _ = pred
 
@@ -92,11 +90,8 @@ class TabDPTRegressor(TabDPTEstimator, RegressorMixin):
                 train_text_nni = None
                 test_text_eval = None
                 if self.text_enhanced and train_text is not None and test_text is not None:
-                    train_text_nni = train_text[torch.tensor(indices_nni)]
-                    train_text_nni = torch.tensor(train_text_nni).to(self.device)
-                    
+                    train_text_nni = train_text[torch.tensor(indices_nni, device=self.device)]
                     test_text_eval = test_text[start:end]
-                    test_text_eval = torch.tensor(test_text_eval).unsqueeze(1).to(self.device)
 
                 X_nni, y_nni = (
                     pad_x(torch.Tensor(X_nni), self.max_features).to(self.device),
@@ -106,16 +101,16 @@ class TabDPTRegressor(TabDPTEstimator, RegressorMixin):
                 X_eval = test_x[start:end]
                 X_eval = pad_x(X_eval.unsqueeze(1), self.max_features).to(self.device)
 
-                # calculate text enhanced attention weight (only if text_enhanced is True)
-                text_enhanced_attn_weight = None
+                text_train_b = text_test_b = None
                 if self.text_enhanced and train_text_nni is not None and test_text_eval is not None:
-                    text_enhanced_attn_weight = self._compute_attn_weight_pairwise_avg(train_text_nni, test_text_eval) # (N_train', N_test')
+                    text_train_b, text_test_b = self.text_embeddings_batched(train_text_nni, test_text_eval)
 
                 pred = self.model(
                     x_src=torch.cat([X_nni, X_eval], dim=1),
                     y_src=y_nni.unsqueeze(-1),
                     task=self.mode,
-                    text_enhanced_attn_weight=text_enhanced_attn_weight,
+                    text_train=text_train_b,
+                    text_test=text_test_b,
                 )
                 pred, _, _ = pred
 
@@ -146,18 +141,10 @@ class TabDPTRegressor(TabDPTEstimator, RegressorMixin):
         X_test = pad_x(test_x[None, :, :], self.max_features).to(self.device)
         
         if self.text_enhanced and train_text is not None and test_text is not None:
-            # Convert to numpy arrays for the function (it expects numpy arrays)
-            text_enhanced_attn_weight = self._compute_attn_weight_pairwise_avg(train_text, test_text) # (N_train, N_test)
-            text_enhanced_attn_weight = text_enhanced_attn_weight[None, :, :].to(self.device) # (1, N_train, N_test)
+            text_train_b, text_test_b = self.text_embeddings_batched(train_text, test_text)
         else:
             raise ValueError("Have to provide text for text-enhanced model")
 
         y_train = train_y[None, :].float()
-        
-        return X_train, X_test, y_train, text_enhanced_attn_weight
-        # pred = self.model(
-        #     x_src=torch.cat([X_train, X_test], dim=1),
-        #     y_src=y_train.unsqueeze(-1),
-        #     task=self.mode,
-        #     text_enhanced_attn_weight=text_enhanced_attn_weight,
-        # )
+
+        return X_train, X_test, y_train, text_train_b, text_test_b
