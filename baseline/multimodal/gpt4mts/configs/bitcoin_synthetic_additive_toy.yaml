@@ -1,0 +1,9 @@
+data_path: data/processed_data/bitcoin_synthetic_data_additive.csv
+date_column: Date
+target_column: target
+text_column: summary_gpt-5-mini
+max_rows: 1000
+train_ratio: 0.65
+val_ratio: 0.2
+seq_len: 3
+pred_len: 1

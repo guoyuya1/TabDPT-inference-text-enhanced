@@ -4,4 +4,3 @@ tabdpt.egg-info/
 uv.lock
 .venv/
 eval_output/
-data/weather/weather_aligned_in7_out1_table.csv

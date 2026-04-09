@@ -24,6 +24,7 @@ class TabDPTRegressor(TabDPTEstimator, RegressorMixin):
         use_flash: bool = True,
         compile: bool = True,
         model_weight_path: str | None = None,
+        text_enhanced: bool = False,
     ):
         super().__init__(
             mode="reg",
@@ -37,12 +38,13 @@ class TabDPTRegressor(TabDPTEstimator, RegressorMixin):
             use_flash=use_flash,
             compile=compile,
             model_weight_path=model_weight_path,
+            text_enhanced=text_enhanced,
         )
 
     @torch.no_grad()
-    def _predict(self, X: np.ndarray, context_size: int = 2048, seed: int | None = None):
-        train_x, train_y, test_x = self._prepare_prediction(X, seed=seed)
-
+    def _predict(self, X: np.ndarray, context_size: int = 2048, seed: int | None = None, text: np.ndarray | None = None):
+        
+        train_x, train_y, test_x, train_text, test_text = self._prepare_prediction(X, seed=seed, text=text)
         if seed is not None:
             self.faiss_knn.index.seed = seed
             feat_perm = generate_random_permutation(train_x.shape[1], seed)
@@ -50,14 +52,29 @@ class TabDPTRegressor(TabDPTEstimator, RegressorMixin):
             test_x = test_x[:, feat_perm]
 
         if context_size >= self.n_instances:
+            # context_size >= n_instances (number of training samples)
+            # Uses all training data as context
+            # Processes the entire test set at once
+            # No batching needed
+            
             X_train = pad_x(train_x[None, :, :], self.max_features).to(self.device)
             X_test = pad_x(test_x[None, :, :], self.max_features).to(self.device)
+            
+            # calculate text enhanced attention weight (only if text_enhanced is True)
+            text_enhanced_attn_weight = None
+            if self.text_enhanced and train_text is not None and test_text is not None:
+                # Convert to numpy arrays for the function (it expects numpy arrays)
+                text_enhanced_attn_weight = self._compute_attn_weight_pairwise_avg(train_text, test_text) # (N_train, N_test)
+                text_enhanced_attn_weight = text_enhanced_attn_weight[None, :, :].to(self.device) # (1, N_train, N_test)
+
             y_train = train_y[None, :].float()
             pred = self.model(
                 x_src=torch.cat([X_train, X_test], dim=1),
                 y_src=y_train.unsqueeze(-1),
                 task=self.mode,
+                text_enhanced_attn_weight=text_enhanced_attn_weight,
             )
+            pred, _, _ = pred
 
             return pred.float().squeeze().detach().cpu().float().numpy()
         else:
@@ -66,36 +83,81 @@ class TabDPTRegressor(TabDPTEstimator, RegressorMixin):
                 start = b * self.inf_batch_size
                 end = min(len(self.X_test), (b + 1) * self.inf_batch_size)
 
+
                 indices_nni = self.faiss_knn.get_knn_indices(self.X_test[start:end], k=context_size)
                 X_nni = train_x[torch.tensor(indices_nni)]
                 y_nni = train_y[torch.tensor(indices_nni)]
+                
+                # Get text embeddings only if text_enhanced is True
+                train_text_nni = None
+                test_text_eval = None
+                if self.text_enhanced and train_text is not None and test_text is not None:
+                    train_text_nni = train_text[torch.tensor(indices_nni)]
+                    train_text_nni = torch.tensor(train_text_nni).to(self.device)
+                    
+                    test_text_eval = test_text[start:end]
+                    test_text_eval = torch.tensor(test_text_eval).unsqueeze(1).to(self.device)
 
                 X_nni, y_nni = (
                     pad_x(torch.Tensor(X_nni), self.max_features).to(self.device),
                     torch.Tensor(y_nni).to(self.device),
                 )
+
                 X_eval = test_x[start:end]
                 X_eval = pad_x(X_eval.unsqueeze(1), self.max_features).to(self.device)
+
+                # calculate text enhanced attention weight (only if text_enhanced is True)
+                text_enhanced_attn_weight = None
+                if self.text_enhanced and train_text_nni is not None and test_text_eval is not None:
+                    text_enhanced_attn_weight = self._compute_attn_weight_pairwise_avg(train_text_nni, test_text_eval) # (N_train', N_test')
+
                 pred = self.model(
                     x_src=torch.cat([X_nni, X_eval], dim=1),
                     y_src=y_nni.unsqueeze(-1),
                     task=self.mode,
+                    text_enhanced_attn_weight=text_enhanced_attn_weight,
                 )
+                pred, _, _ = pred
 
                 pred_list.append(pred.squeeze(dim=0))
 
             return torch.cat(pred_list).squeeze().detach().cpu().float().numpy()
 
-    def _ensemble_predict(self, X: np.ndarray, n_ensembles: int = 8, context_size: int = 2048, seed: int | None = None):
+    def _ensemble_predict(self, X: np.ndarray, n_ensembles: int = 8, context_size: int = 2048, seed: int | None = None, text: np.ndarray | None = None):
         prediction_cumsum = 0
         generator = np.random.SeedSequence(seed)
         for _, inner_seed in tqdm(zip(range(n_ensembles), generator.generate_state(n_ensembles))):
             inner_seed = int(inner_seed)
-            prediction_cumsum += self._predict(X, context_size=context_size, seed=inner_seed)
+            prediction_cumsum += self._predict(X, context_size=context_size, seed=inner_seed, text=text)
         return prediction_cumsum / n_ensembles
 
-    def predict(self, X: np.ndarray, n_ensembles: int = 8, context_size: int = 2048, seed: int | None = None):
+    def predict(self, X: np.ndarray, text: np.ndarray | None = None, n_ensembles: int = 8, context_size: int = 2048, seed: int | None = None):
         if n_ensembles == 1:
-            return self._predict(X, context_size=context_size, seed=seed)
+            return self._predict(X, context_size=context_size, seed=seed, text=text)
         else:
-            return self._ensemble_predict(X, n_ensembles=n_ensembles, context_size=context_size, seed=seed)
+            return self._ensemble_predict(X, n_ensembles=n_ensembles, context_size=context_size, seed=seed, text=text)
+
+    def _predict_autoregressive_fine_tune(self, X: np.ndarray, text: np.ndarray | None = None):
+        
+        train_x, train_y, test_x, train_text, test_text = self._prepare_prediction(X, text=text)
+
+        # assume no knn is used for now for ft
+        X_train = pad_x(train_x[None, :, :], self.max_features).to(self.device)
+        X_test = pad_x(test_x[None, :, :], self.max_features).to(self.device)
+        
+        if self.text_enhanced and train_text is not None and test_text is not None:
+            # Convert to numpy arrays for the function (it expects numpy arrays)
+            text_enhanced_attn_weight = self._compute_attn_weight_pairwise_avg(train_text, test_text) # (N_train, N_test)
+            text_enhanced_attn_weight = text_enhanced_attn_weight[None, :, :].to(self.device) # (1, N_train, N_test)
+        else:
+            raise ValueError("Have to provide text for text-enhanced model")
+
+        y_train = train_y[None, :].float()
+        
+        return X_train, X_test, y_train, text_enhanced_attn_weight
+        # pred = self.model(
+        #     x_src=torch.cat([X_train, X_test], dim=1),
+        #     y_src=y_train.unsqueeze(-1),
+        #     task=self.mode,
+        #     text_enhanced_attn_weight=text_enhanced_attn_weight,
+        # )

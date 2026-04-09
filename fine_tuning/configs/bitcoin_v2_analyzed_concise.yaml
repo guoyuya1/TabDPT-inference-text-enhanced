@@ -1,0 +1,48 @@
+data_path: data/processed_data/bitcoin/bitcoin_gpt_analyzed_concise_text_lag_7_numeric_lag3.csv
+date_column: Date
+numeric_features:
+- Open_lag1
+- Open_lag2
+- Open_lag3
+- High_lag1
+- High_lag2
+- High_lag3
+- Low_lag1
+- Low_lag2
+- Low_lag3
+- Close_lag1
+- Close_lag2
+- Close_lag3
+- Adj_Close_lag1
+- Adj_Close_lag2
+- Adj_Close_lag3
+target_column: Adj_Close
+embedding_lags: []
+embedding_columns:
+- embedding_summary_gpt-5.2_lag1
+- embedding_summary_gpt-5.2_lag2
+- embedding_summary_gpt-5.2_lag3
+embedding_column_template: null
+seed: 0
+max_rows: 1000
+context_ratio: 0.2
+tune_ratio: 0.65
+eval_ratio: 0.15
+model:
+  device: auto
+  model_weight_path: null
+  text_enhanced: true
+  use_flash: true
+  compile_model: true
+tuning:
+  epochs: 50
+  gate_lr: 0.5
+  gate_logit_clamp: 10.0
+  tune_batch_size: 650
+  max_context_for_tune: 1000
+  max_context_for_eval: 1000
+  max_context_for_tune_eval: 1000
+  eval_each_epoch: false
+  debug_text_effect: true
+  log_text_mixing_params: true
+  step_log_every: 50
