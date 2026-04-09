@@ -60,6 +60,23 @@ def load_cfg(path: str) -> dict:
         return yaml.safe_load(f)
 
 
+def patch_params_for_seq_len(seq_len: int, patch_size: int, stride: int) -> tuple[int, int]:
+    """
+    GPT4MTS pads length with stride on the right, then unfold(patch_size, stride).
+    Need seq_len + stride >= patch_size. Cap patch_size to seq_len and stride to patch_size.
+    """
+    if seq_len < 1:
+        raise ValueError("seq_len must be >= 1")
+    ps = max(1, min(int(patch_size), seq_len))
+    st = max(1, min(int(stride), ps))
+    if seq_len + st < ps:
+        st = max(1, ps - seq_len)
+        if seq_len + st < ps:
+            ps = seq_len
+            st = 1
+    return ps, st
+
+
 def embed_texts(texts: list[str], model_name: str, device: torch.device, batch_size: int) -> np.ndarray:
     tok = AutoTokenizer.from_pretrained(model_name)
     lm = AutoModel.from_pretrained(model_name).to(device)
@@ -155,6 +172,16 @@ def main() -> None:
     label_len = int(cfg.get("label_len", seq_len // 2))
     bs = int(cfg.get("batch_size", 8))
 
+    req_ps = int(cfg.get("patch_size", 8))
+    req_st = int(cfg.get("stride", 4))
+    patch_size, stride = patch_params_for_seq_len(seq_len, req_ps, req_st)
+    if patch_size != req_ps or stride != req_st:
+        print(
+            f"seq_len={seq_len}: adjusted patch_size {req_ps}->{patch_size}, stride {req_st}->{stride} "
+            f"(short lookback; defaults assume seq_len >= patch_size).",
+            flush=True,
+        )
+
     train_loader = DataLoader(WindowDataset(train.x, train.s, train.y, seq_len, pred_len), batch_size=bs, shuffle=True)
     val_loader = DataLoader(WindowDataset(val.x, val.s, val.y, seq_len, pred_len), batch_size=bs, shuffle=False)
     test_loader = DataLoader(WindowDataset(test.x, test.s, test.y, seq_len, pred_len), batch_size=bs, shuffle=False)
@@ -162,9 +189,9 @@ def main() -> None:
     model_cfg = SimpleNamespace(
         is_gpt=1,
         revin=bool(cfg.get("revin", False)),
-        patch_size=int(cfg.get("patch_size", 8)),
+        patch_size=patch_size,
         pretrain=int(cfg.get("pretrain", 1)),
-        stride=int(cfg.get("stride", 4)),
+        stride=stride,
         seq_len=seq_len,
         gpt_layers=int(cfg.get("gpt_layers", 6)),
         d_model=int(cfg.get("d_model", 768)),
