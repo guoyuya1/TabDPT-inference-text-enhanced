@@ -1,0 +1,9 @@
+data_path: data/source_data/bitcoin/v1/bitcoin_price_news.csv
+date_column: Date
+target_column: Adj_Close
+text_column: summary_gpt-5-mini
+max_rows: 1000
+train_ratio: 0.7
+val_ratio: 0.2
+seq_len: 30
+pred_len: 1
