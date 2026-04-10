@@ -150,26 +150,56 @@ class TransformerEncoderLayer(nn.Module):
 
         self.text_enhanced = text_enhanced
         if text_enhanced:
-            # Hard-coded text embedding width D in arrays (N, L, D). Must match your data; change if needed.
-            self.TEXT_ENHANCED_EMBED_DIM = 4096
-            # One linear layer: D -> D//8 (min 1). Shared W for text Q and K (tabular V unchanged).
-            self.TEXT_ENHANCED_KEY_DIM = max(self.TEXT_ENHANCED_EMBED_DIM // 8, 1)
+            # Use only the first D dims from each raw text embedding before scoring.
+            self.TEXT_ENHANCED_EMBED_DIM = 1024
+            # Keep total text capacity fixed, but split it across attention heads.
+            self.TEXT_ENHANCED_TOTAL_DIM = 64
+            if self.TEXT_ENHANCED_TOTAL_DIM % num_heads != 0:
+                raise ValueError(
+                    "Text semi-attention total width must be divisible by num_heads: "
+                    f"total_width={self.TEXT_ENHANCED_TOTAL_DIM}, num_heads={num_heads}"
+                )
+            self.TEXT_ENHANCED_HEAD_DIM = self.TEXT_ENHANCED_TOTAL_DIM // num_heads
 
             self.alpha = nn.Parameter(torch.full((num_heads,), 0.0))
-            self.text_shared_proj = nn.Linear(self.TEXT_ENHANCED_EMBED_DIM, self.TEXT_ENHANCED_KEY_DIM, bias=False)
-            self.text_q_norm = LayerNorm(self.TEXT_ENHANCED_KEY_DIM)
-            self.text_k_norm = LayerNorm(self.TEXT_ENHANCED_KEY_DIM)
+            self.text_head_projs = nn.ModuleList(
+                [
+                    nn.Linear(self.TEXT_ENHANCED_EMBED_DIM, self.TEXT_ENHANCED_HEAD_DIM, bias=False)
+                    for _ in range(num_heads)
+                ]
+            )
+            self.text_head_q_norms = nn.ModuleList(
+                [LayerNorm(self.TEXT_ENHANCED_HEAD_DIM) for _ in range(num_heads)]
+            )
+            self.text_head_k_norms = nn.ModuleList(
+                [LayerNorm(self.TEXT_ENHANCED_HEAD_DIM) for _ in range(num_heads)]
+            )
 
     def _text_attention_logits(self, text_train: torch.Tensor, text_test: torch.Tensor) -> torch.Tensor:
-        scale = text_train.new_tensor(1.0 / math.sqrt(self.TEXT_ENHANCED_KEY_DIM))
-        w = self.text_shared_proj.to(dtype=text_train.dtype)
-        q_norm = self.text_q_norm.to(dtype=text_train.dtype)
-        k_norm = self.text_k_norm.to(dtype=text_train.dtype)
-        q = q_norm(w(text_test))
-        k = k_norm(w(text_train))
-        # (B, N, L, dk) @ (B, M, L, dk) summed over dk -> per-lag scores (B, L, N, M)
-        logits_per_lag = torch.einsum("bnld,bmld->blnm", q, k) * scale
-        return logits_per_lag.mean(dim=1)
+        if text_train.shape[-1] < self.TEXT_ENHANCED_EMBED_DIM or text_test.shape[-1] < self.TEXT_ENHANCED_EMBED_DIM:
+            raise ValueError(
+                "Text embedding width is smaller than the configured truncation width: "
+                f"train={text_train.shape}, test={text_test.shape}, required_last_dim={self.TEXT_ENHANCED_EMBED_DIM}"
+            )
+        text_train = text_train[..., :self.TEXT_ENHANCED_EMBED_DIM]
+        text_test = text_test[..., :self.TEXT_ENHANCED_EMBED_DIM]
+        scale = text_train.new_tensor(1.0 / math.sqrt(self.TEXT_ENHANCED_HEAD_DIM))
+
+        head_logits: list[torch.Tensor] = []
+        for proj, q_norm, k_norm in zip(
+            self.text_head_projs,
+            self.text_head_q_norms,
+            self.text_head_k_norms,
+        ):
+            proj = proj.to(dtype=text_train.dtype)
+            q_norm = q_norm.to(dtype=text_train.dtype)
+            k_norm = k_norm.to(dtype=text_train.dtype)
+            q = q_norm(proj(text_test))
+            k = k_norm(proj(text_train))
+            # (B, N, L, dk) @ (B, M, L, dk) summed over dk -> per-lag scores (B, L, N, M)
+            logits_per_lag = torch.einsum("bnld,bmld->blnm", q, k) * scale
+            head_logits.append(logits_per_lag.mean(dim=1))
+        return torch.stack(head_logits, dim=1)
 
     def forward(
         self,
@@ -193,7 +223,6 @@ class TransformerEncoderLayer(nn.Module):
             _, attn_weight, _ = _scaled_dot_product_attention_with_attention_scores(q, k, v)
             text_logits = self._text_attention_logits(text_train, text_test)
             text_w = torch.softmax(text_logits, dim=-1)
-            text_w = text_w.unsqueeze(1).expand(-1, self.num_heads, -1, -1)
 
             ts_gating_val = torch.sigmoid(self.alpha).view(1, self.num_heads, 1, 1)
             attn_weight_train = attn_weight[:, :, :eval_pos, :]

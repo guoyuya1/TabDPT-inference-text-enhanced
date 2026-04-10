@@ -1,4 +1,4 @@
-data_path: data/processed_data/bitcoin_synthetic_data.csv
+data_path: data/processed_data/bitcoin/bitcoin_synthetic_data_additive.csv
 date_column: Date
 numeric_features:
 - Open_lag1
@@ -16,7 +16,10 @@ numeric_features:
 - Adj_Close_lag1
 - Adj_Close_lag2
 - Adj_Close_lag3
-target_column: Adj_Close
+- target_lag1
+- target_lag2
+- target_lag3
+target_column: target
 embedding_lags: []
 embedding_columns:
 - embedding_summary_gpt-5-mini_lag1
@@ -35,14 +38,16 @@ model:
   use_flash: true
   compile_model: true
 tuning:
-  epochs: 20
-  gate_lr: 0.5
+  epochs: 30
+  gate_lr: 0.01
   gate_logit_clamp: 10.0
   tune_batch_size: 650
   max_context_for_tune: 1000
   max_context_for_eval: 1000
   max_context_for_tune_eval: 1000
-  eval_each_epoch: false
+  eval_each_epoch: true
   debug_text_effect: true
-  log_text_mixing_params: false
+  log_text_mixing_params: true
   step_log_every: 50
+  log_text_score_stats: true
+  text_score_sample_size: 8

@@ -114,11 +114,18 @@ def _get_last_layer_text_mixing_modules(
     """
     Return the last block and its text-mixing modules.
 
-    The current branch uses one shared text projection (`text_shared_proj`), but
-    we keep a fallback for the legacy per-head `text_attn_linears` so old runs
-    fail less abruptly if they still point at this script.
+    The current branch uses per-head text projections/norms stored in
+    `ModuleList`s, but we keep fallbacks for older experimental layouts to make
+    local iteration less brittle.
     """
     last_block = reg.model.transformer_encoder[-1]
+    if getattr(last_block, "text_head_projs", None) is not None:
+        text_modules: list[tuple[str, torch.nn.Module]] = [("head_proj", last_block.text_head_projs)]
+        if getattr(last_block, "text_head_q_norms", None) is not None:
+            text_modules.append(("text_q_norm", last_block.text_head_q_norms))
+        if getattr(last_block, "text_head_k_norms", None) is not None:
+            text_modules.append(("text_k_norm", last_block.text_head_k_norms))
+        return last_block, text_modules
     if getattr(last_block, "text_shared_proj", None) is not None:
         text_modules: list[tuple[str, torch.nn.Module]] = [("shared_proj", last_block.text_shared_proj)]
         if getattr(last_block, "text_q_norm", None) is not None:
@@ -129,8 +136,9 @@ def _get_last_layer_text_mixing_modules(
     if getattr(last_block, "text_attn_linears", None) is not None:
         return last_block, [(f"L{idx}", module) for idx, module in enumerate(last_block.text_attn_linears)]
     raise RuntimeError(
-        "Last block has no recognized text-mixing module. Expected `text_shared_proj` "
-        "for the new architecture or `text_attn_linears` for the legacy one."
+        "Last block has no recognized text-mixing module. Expected `text_head_projs` "
+        "for the current architecture, `text_shared_proj` for the prior one, or "
+        "`text_attn_linears` for the legacy one."
     )
 
 
@@ -170,22 +178,52 @@ def get_trainining_info(reg: TabDPTRegressor, gate_logits: torch.Tensor) -> str:
     _, text_modules = _get_last_layer_text_mixing_modules(reg)
     summaries: list[str] = []
     for label, module in text_modules:
-        # Support both plain nn.Linear and nn.Sequential(Linear, GELU, ...).
-        linear = module
-        if not hasattr(linear, "weight"):
-            linear = next((m for m in module.modules() if isinstance(m, torch.nn.Linear)), None)
-            if linear is None:
-                summaries.append(f"{label}(no-linear)")
-                continue
+        submodules = list(module) if isinstance(module, torch.nn.ModuleList) else [module]
+        resolved_modules: list[torch.nn.Module] = []
+        for submodule in submodules:
+            weighted_module = submodule
+            if not hasattr(weighted_module, "weight"):
+                weighted_module = next((m for m in submodule.modules() if isinstance(m, torch.nn.Linear)), None)
+                if weighted_module is None:
+                    continue
+            resolved_modules.append(weighted_module)
+        if not resolved_modules:
+            summaries.append(f"{label}(no-linear)")
+            continue
 
-        weight = linear.weight.detach().float().cpu().reshape(-1)
-        w_val = weight.item() if weight.numel() == 1 else weight.mean().item()
-        w_norm = weight.norm().item()
-        line = f"{label}(||W||={w_norm:.3f}, mean={w_val:.6f}"
-        if linear.bias is not None:
-            bias = linear.bias.detach().float().cpu().reshape(-1)
-            b_val = bias.item() if bias.numel() == 1 else bias.mean().item()
-            line += f", b={b_val:.3f}"
+        if len(resolved_modules) == 1:
+            weighted_module = resolved_modules[0]
+            weight = weighted_module.weight.detach().float().cpu().reshape(-1)
+            w_val = weight.item() if weight.numel() == 1 else weight.mean().item()
+            w_norm = weight.norm().item()
+            line = f"{label}(||W||={w_norm:.3f}, mean={w_val:.6f}"
+            if weighted_module.bias is not None:
+                bias = weighted_module.bias.detach().float().cpu().reshape(-1)
+                b_val = bias.item() if bias.numel() == 1 else bias.mean().item()
+                line += f", b={b_val:.3f}"
+            line += ")"
+            summaries.append(line)
+            continue
+
+        weight_norms = torch.tensor(
+            [weighted_module.weight.detach().float().cpu().reshape(-1).norm().item() for weighted_module in resolved_modules]
+        )
+        weight_means = torch.tensor(
+            [weighted_module.weight.detach().float().cpu().reshape(-1).mean().item() for weighted_module in resolved_modules]
+        )
+        line = (
+            f"{label}(heads={len(resolved_modules)}, "
+            f"||W|| mean/min/max={weight_norms.mean().item():.3f}/"
+            f"{weight_norms.min().item():.3f}/{weight_norms.max().item():.3f}, "
+            f"mean(mean)={weight_means.mean().item():.6f}"
+        )
+        bias_means = [
+            weighted_module.bias.detach().float().cpu().reshape(-1).mean().item()
+            for weighted_module in resolved_modules
+            if weighted_module.bias is not None
+        ]
+        if bias_means:
+            line += f", b_mean={float(np.mean(bias_means)):.3f}"
         line += ")"
         summaries.append(line)
     return f"gate: {gate_stats(gate_logits)} | {' '.join(summaries)}"
@@ -203,7 +241,7 @@ def format_text_score_info(
 
     The current text-enhanced model computes scores with the last block's
     `_text_attention_logits(...)`, which returns raw pre-softmax logits with
-    shape (B, N_test, N_train).
+    shape (B, H, N_test, N_train).
     """
     last_block = reg.model.transformer_encoder[-1]
     if getattr(last_block, "_text_attention_logits", None) is None:
@@ -213,16 +251,16 @@ def format_text_score_info(
         logits = last_block._text_attention_logits(text_train, text_test).detach().float().cpu()
 
     flat = logits.reshape(-1)
-    first_query = logits[0, 0].reshape(-1)
-    sample_count = min(sample_size, first_query.numel())
-    sample_vals = ", ".join(f"{v:.4f}" for v in first_query[:sample_count].tolist())
-    if first_query.numel() > sample_count:
+    head0_query = logits[0, 0, 0].reshape(-1)
+    sample_count = min(sample_size, head0_query.numel())
+    sample_vals = ", ".join(f"{v:.4f}" for v in head0_query[:sample_count].tolist())
+    if head0_query.numel() > sample_count:
         sample_vals = f"{sample_vals}, ..."
 
     return (
         f"text_score(shape={tuple(logits.shape)}, "
         f"mean/min/max={flat.mean().item():.4f}/{flat.min().item():.4f}/{flat.max().item():.4f}, "
-        f"sample=[{sample_vals}])"
+        f"head0_sample=[{sample_vals}])"
     )
 
 

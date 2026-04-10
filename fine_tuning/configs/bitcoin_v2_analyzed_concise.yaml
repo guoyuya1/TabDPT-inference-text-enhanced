@@ -35,14 +35,14 @@ model:
   use_flash: true
   compile_model: true
 tuning:
-  epochs: 1000
-  gate_lr: 0.1
+  epochs: 30
+  gate_lr: 0.01
   gate_logit_clamp: 10.0
   tune_batch_size: 650
   max_context_for_tune: 1000
   max_context_for_eval: 1000
   max_context_for_tune_eval: 1000
-  eval_each_epoch: false
+  eval_each_epoch: true
   debug_text_effect: true
   log_text_mixing_params: true
   step_log_every: 50
