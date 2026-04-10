@@ -29,6 +29,8 @@ class TuningConfig:
     log_text_mixing_params: bool
     step_log_every: int
     loss_type: str = "l1"
+    log_text_score_stats: bool = False
+    text_score_sample_size: int = 8
 
 
 @dataclass(frozen=True)

@@ -8,7 +8,7 @@ the context split, and then fine-tunes only the last layer's text-mixing
 parameters:
 
 - the per-head `alpha` gate logits
-- the per-head text attention linear layers
+- the text attention projection used to score train/test text pairs
 
 Fine-tuning uses rolling one-step prediction on the tune split, so each target
 row only sees past rows as context. The script prints baseline and post-tuning
@@ -108,16 +108,42 @@ def get_last_layer_gate_param(reg: TabDPTRegressor) -> torch.nn.Parameter:
     return last_block.alpha
 
 
+def _get_last_layer_text_mixing_modules(
+    reg: TabDPTRegressor,
+) -> tuple[torch.nn.Module, list[tuple[str, torch.nn.Module]]]:
+    """
+    Return the last block and its text-mixing modules.
+
+    The current branch uses one shared text projection (`text_shared_proj`), but
+    we keep a fallback for the legacy per-head `text_attn_linears` so old runs
+    fail less abruptly if they still point at this script.
+    """
+    last_block = reg.model.transformer_encoder[-1]
+    if getattr(last_block, "text_shared_proj", None) is not None:
+        text_modules: list[tuple[str, torch.nn.Module]] = [("shared_proj", last_block.text_shared_proj)]
+        if getattr(last_block, "text_q_norm", None) is not None:
+            text_modules.append(("text_q_norm", last_block.text_q_norm))
+        if getattr(last_block, "text_k_norm", None) is not None:
+            text_modules.append(("text_k_norm", last_block.text_k_norm))
+        return last_block, text_modules
+    if getattr(last_block, "text_attn_linears", None) is not None:
+        return last_block, [(f"L{idx}", module) for idx, module in enumerate(last_block.text_attn_linears)]
+    raise RuntimeError(
+        "Last block has no recognized text-mixing module. Expected `text_shared_proj` "
+        "for the new architecture or `text_attn_linears` for the legacy one."
+    )
+
+
 def freeze_all_but_last_gate(reg: TabDPTRegressor) -> tuple[torch.nn.Parameter, list[torch.nn.Parameter]]:
     """Freeze all parameters except the last block's text-mixing parameters."""
     for p in reg.model.parameters():
         p.requires_grad_(False)
-    last_block = reg.model.transformer_encoder[-1]
     gate = get_last_layer_gate_param(reg)
+    _, text_modules = _get_last_layer_text_mixing_modules(reg)
     gate.requires_grad_(True)
     tunable_params: list[torch.nn.Parameter] = [gate]
-    for linear in last_block.text_attn_linears:
-        for p in linear.parameters():
+    for _, module in text_modules:
+        for p in module.parameters():
             p.requires_grad_(True)
             tunable_params.append(p)
     return gate, tunable_params
@@ -140,21 +166,22 @@ def gate_stats(gate_logits: torch.Tensor) -> str:
 
 
 def get_trainining_info(reg: TabDPTRegressor, gate_logits: torch.Tensor) -> str:
-    """Compact one-line summary for the gate and last block text linear params."""
-    last_block = reg.model.transformer_encoder[-1]
+    """Compact one-line summary for the gate and last block text-mixing params."""
+    _, text_modules = _get_last_layer_text_mixing_modules(reg)
     summaries: list[str] = []
-    for idx, proj in enumerate(last_block.text_attn_linears):
+    for label, module in text_modules:
         # Support both plain nn.Linear and nn.Sequential(Linear, GELU, ...).
-        linear = proj
+        linear = module
         if not hasattr(linear, "weight"):
-            linear = next((m for m in proj.modules() if isinstance(m, torch.nn.Linear)), None)
+            linear = next((m for m in module.modules() if isinstance(m, torch.nn.Linear)), None)
             if linear is None:
-                summaries.append(f"L{idx}(no-linear)")
+                summaries.append(f"{label}(no-linear)")
                 continue
 
         weight = linear.weight.detach().float().cpu().reshape(-1)
         w_val = weight.item() if weight.numel() == 1 else weight.mean().item()
-        line = f"L{idx}(w={w_val:.3f}"
+        w_norm = weight.norm().item()
+        line = f"{label}(||W||={w_norm:.3f}, mean={w_val:.6f}"
         if linear.bias is not None:
             bias = linear.bias.detach().float().cpu().reshape(-1)
             b_val = bias.item() if bias.numel() == 1 else bias.mean().item()
@@ -162,6 +189,41 @@ def get_trainining_info(reg: TabDPTRegressor, gate_logits: torch.Tensor) -> str:
         line += ")"
         summaries.append(line)
     return f"gate: {gate_stats(gate_logits)} | {' '.join(summaries)}"
+
+
+def format_text_score_info(
+    reg: TabDPTRegressor,
+    *,
+    text_train: torch.Tensor,
+    text_test: torch.Tensor,
+    sample_size: int = 8,
+) -> str:
+    """
+    Summarize the raw text score logits produced by the learned projection path.
+
+    The current text-enhanced model computes scores with the last block's
+    `_text_attention_logits(...)`, which returns raw pre-softmax logits with
+    shape (B, N_test, N_train).
+    """
+    last_block = reg.model.transformer_encoder[-1]
+    if getattr(last_block, "_text_attention_logits", None) is None:
+        return "text_score(unavailable)"
+
+    with torch.no_grad():
+        logits = last_block._text_attention_logits(text_train, text_test).detach().float().cpu()
+
+    flat = logits.reshape(-1)
+    first_query = logits[0, 0].reshape(-1)
+    sample_count = min(sample_size, first_query.numel())
+    sample_vals = ", ".join(f"{v:.4f}" for v in first_query[:sample_count].tolist())
+    if first_query.numel() > sample_count:
+        sample_vals = f"{sample_vals}, ..."
+
+    return (
+        f"text_score(shape={tuple(logits.shape)}, "
+        f"mean/min/max={flat.mean().item():.4f}/{flat.min().item():.4f}/{flat.max().item():.4f}, "
+        f"sample=[{sample_vals}])"
+    )
 
 
 def _normalized_regression_loss(
@@ -202,7 +264,7 @@ def fine_tune_external_gate(
     - `reg.predict()` disables gradients, so we can't optimize with it.
     - We still re-use everything from `reg.fit()`:
         - fitted imputers/scalers
-        - text similarity attention via `_compute_attn_weight_pairwise_avg(...)`
+        - batching helpers that shape text inputs for the last-layer text module
 
     Rolling window (per step inside each epoch):
     - Fixed context = global context + tune rows before this batch
@@ -229,6 +291,7 @@ def fine_tune_external_gate(
             current_batch_size = end - start
             preds_for_log: list[torch.Tensor] = []
             loss_sum = 0.0
+            text_score_info: str | None = None
 
             for point_idx in range(start, end):
                 X_point_context = np.concatenate((X_context_proc, X_tune_proc[:point_idx]))
@@ -249,7 +312,17 @@ def fine_tune_external_gate(
 
                 train_text_batch = text_context_step[None, ...]
                 test_text_batch = text_tune[point_idx:point_idx + 1][None, ...]
-                attn_weight_external = reg._compute_attn_weight_pairwise_avg(train_text_batch, test_text_batch)
+                text_train_b, text_test_b = reg.text_embeddings_batched(
+                    train_text_batch,
+                    test_text_batch,
+                )
+                if text_score_info is None and tuning_cfg.log_text_score_stats:
+                    text_score_info = format_text_score_info(
+                        reg,
+                        text_train=text_train_b,
+                        text_test=text_test_b,
+                        sample_size=tuning_cfg.text_score_sample_size,
+                    )
 
                 X_train_tensor = torch.tensor(X_context_step, dtype=torch.float32, device=reg.device).unsqueeze(0)
                 X_train_tensor = pad_x(X_train_tensor, reg.max_features)
@@ -265,7 +338,8 @@ def fine_tune_external_gate(
                     x_src=torch.cat([X_train_tensor, X_test_tensor], dim=1),
                     y_src=y_context_tensor.unsqueeze(-1),
                     task="reg",
-                    text_enhanced_attn_weight=attn_weight_external,
+                    text_train=text_train_b,
+                    text_test=text_test_b,
                 )
                 pred_point = pred_point.squeeze(-1).reshape(-1)
                 preds_for_log.append(pred_point.detach())
@@ -303,6 +377,8 @@ def fine_tune_external_gate(
                     f"Epoch {epoch:02d} Step {step_idx+1:03d}/{num_steps} "
                     f"| Loss: {avg_loss:.4f} | MAE: {mae:.4f} | RMSE: {rmse:.4f}"
                 )
+                if text_score_info is not None:
+                    print(f"Epoch {epoch:02d} Step {step_idx+1:03d} | {text_score_info}")
         if tuning_cfg.log_text_mixing_params:
             print(
                 f"Epoch {epoch:02d} text-mixing params | "

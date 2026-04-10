@@ -151,18 +151,22 @@ class TransformerEncoderLayer(nn.Module):
         self.text_enhanced = text_enhanced
         if text_enhanced:
             # Hard-coded text embedding width D in arrays (N, L, D). Must match your data; change if needed.
-            self.TEXT_ENHANCED_EMBED_DIM = 1024
+            self.TEXT_ENHANCED_EMBED_DIM = 4096
             # One linear layer: D -> D//8 (min 1). Shared W for text Q and K (tabular V unchanged).
             self.TEXT_ENHANCED_KEY_DIM = max(self.TEXT_ENHANCED_EMBED_DIM // 8, 1)
 
-            self.alpha = nn.Parameter(torch.full((num_heads,), 10.0))
+            self.alpha = nn.Parameter(torch.full((num_heads,), 0.0))
             self.text_shared_proj = nn.Linear(self.TEXT_ENHANCED_EMBED_DIM, self.TEXT_ENHANCED_KEY_DIM, bias=False)
+            self.text_q_norm = LayerNorm(self.TEXT_ENHANCED_KEY_DIM)
+            self.text_k_norm = LayerNorm(self.TEXT_ENHANCED_KEY_DIM)
 
     def _text_attention_logits(self, text_train: torch.Tensor, text_test: torch.Tensor) -> torch.Tensor:
         scale = text_train.new_tensor(1.0 / math.sqrt(self.TEXT_ENHANCED_KEY_DIM))
         w = self.text_shared_proj.to(dtype=text_train.dtype)
-        q = w(text_test)
-        k = w(text_train)
+        q_norm = self.text_q_norm.to(dtype=text_train.dtype)
+        k_norm = self.text_k_norm.to(dtype=text_train.dtype)
+        q = q_norm(w(text_test))
+        k = k_norm(w(text_train))
         # (B, N, L, dk) @ (B, M, L, dk) summed over dk -> per-lag scores (B, L, N, M)
         logits_per_lag = torch.einsum("bnld,bmld->blnm", q, k) * scale
         return logits_per_lag.mean(dim=1)
