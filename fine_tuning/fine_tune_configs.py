@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import MISSING, dataclass
 
 import yaml
 
@@ -19,6 +19,7 @@ class ModelConfig:
 class TuningConfig:
     epochs: int
     gate_lr: float
+    text_attn_lr: float
     gate_logit_clamp: float | None
     tune_batch_size: int
     max_context_for_tune: int | None
@@ -67,6 +68,18 @@ def load_fine_tune_config(config_path: str, dataset_name: str | None) -> DataCon
     dataset_cfg.setdefault("embedding_columns", None)
     dataset_cfg.setdefault("embedding_column_template", None)
     dataset_cfg["model"] = ModelConfig(**dataset_cfg["model"])
+    missing_tuning_keys = [
+        key
+        for key, field in TuningConfig.__dataclass_fields__.items()
+        if key not in dataset_cfg["tuning"]
+        and field.default is MISSING
+        and field.default_factory is MISSING
+    ]
+    if missing_tuning_keys:
+        raise ValueError(
+            "Fine-tune config is missing required tuning keys: "
+            + ", ".join(sorted(missing_tuning_keys))
+        )
     dataset_cfg["tuning"] = TuningConfig(
         **{
             key: dataset_cfg["tuning"][key]

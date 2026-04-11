@@ -40,6 +40,7 @@ model:
 tuning:
   epochs: 30
   gate_lr: 0.01
+  text_attn_lr: 0.001
   gate_logit_clamp: 10.0
   tune_batch_size: 650
   max_context_for_tune: 1000

@@ -142,19 +142,70 @@ def _get_last_layer_text_mixing_modules(
     )
 
 
-def freeze_all_but_last_gate(reg: TabDPTRegressor) -> tuple[torch.nn.Parameter, list[torch.nn.Parameter]]:
-    """Freeze all parameters except the last block's text-mixing parameters."""
+def freeze_all_but_last_text_mixing(
+    reg: TabDPTRegressor,
+) -> tuple[torch.nn.Parameter, list[torch.nn.Parameter], list[torch.nn.Parameter]]:
+    """Freeze the model except the last block's gate and text-attention parameters."""
     for p in reg.model.parameters():
         p.requires_grad_(False)
+
     gate = get_last_layer_gate_param(reg)
     _, text_modules = _get_last_layer_text_mixing_modules(reg)
     gate.requires_grad_(True)
-    tunable_params: list[torch.nn.Parameter] = [gate]
+
+    gate_params = [gate]
+    text_attn_params: list[torch.nn.Parameter] = []
+    seen_param_ids = {id(gate)}
     for _, module in text_modules:
         for p in module.parameters():
+            if id(p) in seen_param_ids:
+                continue
             p.requires_grad_(True)
-            tunable_params.append(p)
-    return gate, tunable_params
+            text_attn_params.append(p)
+            seen_param_ids.add(id(p))
+    return gate, gate_params, text_attn_params
+
+
+def freeze_all_but_last_gate(reg: TabDPTRegressor) -> tuple[torch.nn.Parameter, list[torch.nn.Parameter]]:
+    """Backward-compatible wrapper that returns the combined gate + text-mixing params."""
+    gate, gate_params, text_attn_params = freeze_all_but_last_text_mixing(reg)
+    return gate, gate_params + text_attn_params
+
+
+def build_text_mixing_optimizer(
+    *,
+    gate_params: list[torch.nn.Parameter],
+    text_attn_params: list[torch.nn.Parameter],
+    tuning_cfg: TuningConfig,
+) -> schedulefree.AdamWScheduleFree:
+    """Build one optimizer with separate LR groups for gate and text-attention params."""
+    if not gate_params:
+        raise ValueError("Expected at least one gate parameter for text-mixing fine-tuning.")
+    if not text_attn_params:
+        raise ValueError("Expected at least one text-attention parameter for text-mixing fine-tuning.")
+
+    gate_param_ids = {id(param) for param in gate_params}
+    text_attn_param_ids = {id(param) for param in text_attn_params}
+    if gate_param_ids & text_attn_param_ids:
+        raise ValueError("Gate and text-attention parameter groups must be disjoint.")
+
+    param_groups = [
+        {
+            "params": gate_params,
+            "lr": tuning_cfg.gate_lr,
+            "weight_decay": 0.0,
+        },
+        {
+            "params": text_attn_params,
+            "lr": tuning_cfg.text_attn_lr,
+            "weight_decay": 0.0,
+        },
+    ]
+    return schedulefree.AdamWScheduleFree(
+        param_groups,
+        lr=tuning_cfg.gate_lr,
+        weight_decay=0.0,
+    )
 
 
 def gate_stats(gate_logits: torch.Tensor) -> str:
@@ -309,10 +360,17 @@ def fine_tune_external_gate(
     - Within the batch, each row is predicted from base context plus earlier batch rows
     - Gradients are accumulated point-by-point and averaged over the batch
     """
-    gate, tunable_params = freeze_all_but_last_gate(reg)
-
-    optimizer = schedulefree.AdamWScheduleFree(tunable_params, lr=tuning_cfg.gate_lr, weight_decay=0.0)
-    print(f"Tuning last-layer text-mixing params (loss_type={tuning_cfg.loss_type})")
+    gate, gate_params, text_attn_params = freeze_all_but_last_text_mixing(reg)
+    optimizer = build_text_mixing_optimizer(
+        gate_params=gate_params,
+        text_attn_params=text_attn_params,
+        tuning_cfg=tuning_cfg,
+    )
+    print(
+        "Tuning last-layer text-mixing params "
+        f"(loss_type={tuning_cfg.loss_type}, gate_lr={tuning_cfg.gate_lr}, "
+        f"text_attn_lr={tuning_cfg.text_attn_lr}, optimizer={optimizer.__class__.__name__})"
+    )
 
     reg.model.eval()
     if hasattr(optimizer, "train"):
