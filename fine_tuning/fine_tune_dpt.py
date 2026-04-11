@@ -1,11 +1,11 @@
 """
-Config-driven fine-tuning of TabDPT's last-layer text-mixing parameters.
+Config-driven fine-tuning of TabDPT's text-mixing parameters in the final transformer layers.
 
 This script expects a processed CSV with numeric features, a numeric target, and
 text embedding columns. It loads one YAML config, splits the data
 chronologically into context / train / val / test, fits the base TabDPT
-regressor on the context split, and then fine-tunes only the last layer's
-text-mixing parameters:
+regressor on the context split, and then fine-tunes only the text-mixing
+parameters in the text-enhanced transformer layers:
 
 - the per-head `alpha` gate logits
 - the text attention projection used to score train/test text pairs
@@ -144,74 +144,119 @@ def preprocess_features(
 
     return X_proc.astype(np.float32)
 
-def get_last_layer_gate_param(reg: TabDPTRegressor) -> torch.nn.Parameter:
-    """
-    Return the trainable gate parameter (per-head logits) from the last transformer block.
 
-    Only the last transformer block is `text_enhanced=True` in this repo.
-    """
-    last_block = reg.model.transformer_encoder[-1]
-    if getattr(last_block, "alpha", None) is None:
-        raise RuntimeError("Last block has no alpha gate. Is text_enhanced enabled in the model?")
-    return last_block.alpha
+def _layer_label(layer_idx: int) -> str:
+    return f"L{layer_idx + 1}"
 
 
-def _get_last_layer_text_mixing_modules(
+def _get_text_enhanced_blocks(
     reg: TabDPTRegressor,
-) -> tuple[torch.nn.Module, list[tuple[str, torch.nn.Module]]]:
+) -> list[tuple[int, torch.nn.Module]]:
+    text_blocks: list[tuple[int, torch.nn.Module]] = []
+    for layer_idx, block in enumerate(reg.model.transformer_encoder):
+        has_gate = getattr(block, "alpha", None) is not None
+        if not getattr(block, "text_enhanced", False) and not has_gate:
+            continue
+        if not has_gate:
+            raise RuntimeError(
+                f"{_layer_label(layer_idx)} is marked as text-enhanced but has no alpha gate."
+            )
+        text_blocks.append((layer_idx, block))
+    if not text_blocks:
+        raise RuntimeError("Model has no text-enhanced transformer blocks. Is text_enhanced enabled?")
+    return text_blocks
+
+
+def get_text_enhanced_gate_params(
+    reg: TabDPTRegressor,
+) -> list[tuple[str, torch.nn.Parameter]]:
+    """Return the trainable gate tensors for every text-enhanced transformer block."""
+    return [(_layer_label(layer_idx), block.alpha) for layer_idx, block in _get_text_enhanced_blocks(reg)]
+
+
+def get_last_layer_gate_param(reg: TabDPTRegressor) -> torch.nn.Parameter:
+    """Backward-compatible wrapper that returns the final text-enhanced block's gate tensor."""
+    return get_text_enhanced_gate_params(reg)[-1][1]
+
+
+def _get_text_mixing_modules_for_block(
+    block: torch.nn.Module,
+    *,
+    layer_label: str,
+) -> list[tuple[str, torch.nn.Module]]:
     """
-    Return the last block and its text-mixing modules.
+    Return a block's text-mixing modules.
 
     The current branch uses per-head text projections/norms stored in
     `ModuleList`s, but we keep fallbacks for older experimental layouts to make
     local iteration less brittle.
     """
-    last_block = reg.model.transformer_encoder[-1]
-    if getattr(last_block, "text_head_projs", None) is not None:
-        text_modules: list[tuple[str, torch.nn.Module]] = [("head_proj", last_block.text_head_projs)]
-        if getattr(last_block, "text_head_q_norms", None) is not None:
-            text_modules.append(("text_q_norm", last_block.text_head_q_norms))
-        if getattr(last_block, "text_head_k_norms", None) is not None:
-            text_modules.append(("text_k_norm", last_block.text_head_k_norms))
-        return last_block, text_modules
-    if getattr(last_block, "text_shared_proj", None) is not None:
-        text_modules: list[tuple[str, torch.nn.Module]] = [("shared_proj", last_block.text_shared_proj)]
-        if getattr(last_block, "text_q_norm", None) is not None:
-            text_modules.append(("text_q_norm", last_block.text_q_norm))
-        if getattr(last_block, "text_k_norm", None) is not None:
-            text_modules.append(("text_k_norm", last_block.text_k_norm))
-        return last_block, text_modules
-    if getattr(last_block, "text_attn_linears", None) is not None:
-        return last_block, [(f"L{idx}", module) for idx, module in enumerate(last_block.text_attn_linears)]
+    if getattr(block, "text_head_projs", None) is not None:
+        text_modules: list[tuple[str, torch.nn.Module]] = [("head_proj", block.text_head_projs)]
+        if getattr(block, "text_head_q_norms", None) is not None:
+            text_modules.append(("text_q_norm", block.text_head_q_norms))
+        if getattr(block, "text_head_k_norms", None) is not None:
+            text_modules.append(("text_k_norm", block.text_head_k_norms))
+        return text_modules
+    if getattr(block, "text_shared_proj", None) is not None:
+        text_modules = [("shared_proj", block.text_shared_proj)]
+        if getattr(block, "text_q_norm", None) is not None:
+            text_modules.append(("text_q_norm", block.text_q_norm))
+        if getattr(block, "text_k_norm", None) is not None:
+            text_modules.append(("text_k_norm", block.text_k_norm))
+        return text_modules
+    if getattr(block, "text_attn_linears", None) is not None:
+        return [(f"text_attn_{idx}", module) for idx, module in enumerate(block.text_attn_linears)]
     raise RuntimeError(
-        "Last block has no recognized text-mixing module. Expected `text_head_projs` "
+        f"{layer_label} has no recognized text-mixing module. Expected `text_head_projs` "
         "for the current architecture, `text_shared_proj` for the prior one, or "
         "`text_attn_linears` for the legacy one."
     )
 
 
-def freeze_all_but_last_text_mixing(
+def _get_text_enhanced_block_specs(
     reg: TabDPTRegressor,
-) -> tuple[torch.nn.Parameter, list[torch.nn.Parameter], list[torch.nn.Parameter]]:
-    """Freeze the model except the last block's gate and text-attention parameters."""
+) -> list[tuple[str, torch.nn.Module, list[tuple[str, torch.nn.Module]]]]:
+    return [
+        (_layer_label(layer_idx), block, _get_text_mixing_modules_for_block(block, layer_label=_layer_label(layer_idx)))
+        for layer_idx, block in _get_text_enhanced_blocks(reg)
+    ]
+
+
+def _freeze_all_but_text_mixing(
+    reg: TabDPTRegressor,
+) -> tuple[list[torch.nn.Parameter], list[torch.nn.Parameter]]:
+    """Freeze the model except the text-enhanced blocks' gate and text-attention parameters."""
     for p in reg.model.parameters():
         p.requires_grad_(False)
 
-    gate = get_last_layer_gate_param(reg)
-    _, text_modules = _get_last_layer_text_mixing_modules(reg)
-    gate.requires_grad_(True)
-
-    gate_params = [gate]
+    gate_params: list[torch.nn.Parameter] = []
     text_attn_params: list[torch.nn.Parameter] = []
-    seen_param_ids = {id(gate)}
-    for _, module in text_modules:
-        for p in module.parameters():
-            if id(p) in seen_param_ids:
-                continue
-            p.requires_grad_(True)
-            text_attn_params.append(p)
-            seen_param_ids.add(id(p))
-    return gate, gate_params, text_attn_params
+    seen_param_ids: set[int] = set()
+    for _, gate in get_text_enhanced_gate_params(reg):
+        if id(gate) in seen_param_ids:
+            continue
+        gate.requires_grad_(True)
+        gate_params.append(gate)
+        seen_param_ids.add(id(gate))
+
+    for _, _, text_modules in _get_text_enhanced_block_specs(reg):
+        for _, module in text_modules:
+            for param in module.parameters():
+                if id(param) in seen_param_ids:
+                    continue
+                param.requires_grad_(True)
+                text_attn_params.append(param)
+                seen_param_ids.add(id(param))
+    return gate_params, text_attn_params
+
+
+def freeze_all_but_last_text_mixing(
+    reg: TabDPTRegressor,
+) -> tuple[torch.nn.Parameter, list[torch.nn.Parameter], list[torch.nn.Parameter]]:
+    """Backward-compatible wrapper that now unfreezes every text-enhanced block."""
+    gate_params, text_attn_params = _freeze_all_but_text_mixing(reg)
+    return gate_params[-1], gate_params, text_attn_params
 
 
 def freeze_all_but_last_gate(reg: TabDPTRegressor) -> tuple[torch.nn.Parameter, list[torch.nn.Parameter]]:
@@ -272,60 +317,73 @@ def gate_stats(gate_logits: torch.Tensor) -> str:
     )
 
 
-def get_trainining_info(reg: TabDPTRegressor, gate_logits: torch.Tensor) -> str:
-    """Compact one-line summary for the gate and last block text-mixing params."""
-    _, text_modules = _get_last_layer_text_mixing_modules(reg)
-    summaries: list[str] = []
-    for label, module in text_modules:
-        submodules = list(module) if isinstance(module, torch.nn.ModuleList) else [module]
-        resolved_modules: list[torch.nn.Module] = []
-        for submodule in submodules:
-            weighted_module = submodule
-            if not hasattr(weighted_module, "weight"):
-                weighted_module = next((m for m in submodule.modules() if isinstance(m, torch.nn.Linear)), None)
-                if weighted_module is None:
-                    continue
-            resolved_modules.append(weighted_module)
-        if not resolved_modules:
-            summaries.append(f"{label}(no-linear)")
-            continue
+def text_mixing_gate_stats(reg: TabDPTRegressor) -> str:
+    """Human-readable summary for the gates in every text-enhanced transformer block."""
+    return " || ".join(
+        f"{layer_label} gate: {gate_stats(gate_logits)}"
+        for layer_label, gate_logits in get_text_enhanced_gate_params(reg)
+    )
 
-        if len(resolved_modules) == 1:
-            weighted_module = resolved_modules[0]
-            weight = weighted_module.weight.detach().float().cpu().reshape(-1)
-            w_val = weight.item() if weight.numel() == 1 else weight.mean().item()
-            w_norm = weight.norm().item()
-            line = f"{label}(||W||={w_norm:.3f}, mean={w_val:.6f}"
-            if weighted_module.bias is not None:
-                bias = weighted_module.bias.detach().float().cpu().reshape(-1)
-                b_val = bias.item() if bias.numel() == 1 else bias.mean().item()
-                line += f", b={b_val:.3f}"
-            line += ")"
-            summaries.append(line)
-            continue
 
-        weight_norms = torch.tensor(
-            [weighted_module.weight.detach().float().cpu().reshape(-1).norm().item() for weighted_module in resolved_modules]
-        )
-        weight_means = torch.tensor(
-            [weighted_module.weight.detach().float().cpu().reshape(-1).mean().item() for weighted_module in resolved_modules]
-        )
-        line = (
-            f"{label}(heads={len(resolved_modules)}, "
-            f"||W|| mean/min/max={weight_norms.mean().item():.3f}/"
-            f"{weight_norms.min().item():.3f}/{weight_norms.max().item():.3f}, "
-            f"mean(mean)={weight_means.mean().item():.6f}"
-        )
-        bias_means = [
-            weighted_module.bias.detach().float().cpu().reshape(-1).mean().item()
-            for weighted_module in resolved_modules
-            if weighted_module.bias is not None
-        ]
-        if bias_means:
-            line += f", b_mean={float(np.mean(bias_means)):.3f}"
+def _text_module_param_summary(label: str, module: torch.nn.Module) -> str:
+    submodules = list(module) if isinstance(module, torch.nn.ModuleList) else [module]
+    resolved_modules: list[torch.nn.Module] = []
+    for submodule in submodules:
+        weighted_module = submodule
+        if not hasattr(weighted_module, "weight"):
+            weighted_module = next((m for m in submodule.modules() if isinstance(m, torch.nn.Linear)), None)
+            if weighted_module is None:
+                continue
+        resolved_modules.append(weighted_module)
+    if not resolved_modules:
+        return f"{label}(no-linear)"
+
+    if len(resolved_modules) == 1:
+        weighted_module = resolved_modules[0]
+        weight = weighted_module.weight.detach().float().cpu().reshape(-1)
+        w_val = weight.item() if weight.numel() == 1 else weight.mean().item()
+        w_norm = weight.norm().item()
+        line = f"{label}(||W||={w_norm:.3f}, mean={w_val:.6f}"
+        if weighted_module.bias is not None:
+            bias = weighted_module.bias.detach().float().cpu().reshape(-1)
+            b_val = bias.item() if bias.numel() == 1 else bias.mean().item()
+            line += f", b={b_val:.3f}"
         line += ")"
-        summaries.append(line)
-    return f"gate: {gate_stats(gate_logits)} | {' '.join(summaries)}"
+        return line
+
+    weight_norms = torch.tensor(
+        [weighted_module.weight.detach().float().cpu().reshape(-1).norm().item() for weighted_module in resolved_modules]
+    )
+    weight_means = torch.tensor(
+        [weighted_module.weight.detach().float().cpu().reshape(-1).mean().item() for weighted_module in resolved_modules]
+    )
+    line = (
+        f"{label}(heads={len(resolved_modules)}, "
+        f"||W|| mean/min/max={weight_norms.mean().item():.3f}/"
+        f"{weight_norms.min().item():.3f}/{weight_norms.max().item():.3f}, "
+        f"mean(mean)={weight_means.mean().item():.6f}"
+    )
+    bias_means = [
+        weighted_module.bias.detach().float().cpu().reshape(-1).mean().item()
+        for weighted_module in resolved_modules
+        if weighted_module.bias is not None
+    ]
+    if bias_means:
+        line += f", b_mean={float(np.mean(bias_means)):.3f}"
+    line += ")"
+    return line
+
+
+def get_trainining_info(reg: TabDPTRegressor, gate_logits: torch.Tensor | None = None) -> str:
+    """Compact one-line summary for each text-enhanced block's gate and text-mixing params."""
+    del gate_logits
+    layer_summaries: list[str] = []
+    for layer_label, block, text_modules in _get_text_enhanced_block_specs(reg):
+        module_summaries = [_text_module_param_summary(module_label, module) for module_label, module in text_modules]
+        layer_summaries.append(
+            f"{layer_label} gate: {gate_stats(block.alpha)} | {' '.join(module_summaries)}"
+        )
+    return " || ".join(layer_summaries)
 
 
 def format_text_score_info(
@@ -338,29 +396,38 @@ def format_text_score_info(
     """
     Summarize the raw text score logits produced by the learned projection path.
 
-    The current text-enhanced model computes scores with the last block's
-    `_text_attention_logits(...)`, which returns raw pre-softmax logits with
-    shape (B, H, N_test, N_train).
+    The current text-enhanced model computes scores with each text-enhanced
+    block's `_text_attention_logits(...)`, which returns raw pre-softmax logits
+    with shape (B, H, N_test, N_train).
     """
-    last_block = reg.model.transformer_encoder[-1]
-    if getattr(last_block, "_text_attention_logits", None) is None:
+    try:
+        text_blocks = _get_text_enhanced_blocks(reg)
+    except RuntimeError:
         return "text_score(unavailable)"
 
-    with torch.no_grad():
-        logits = last_block._text_attention_logits(text_train, text_test).detach().float().cpu()
+    summaries: list[str] = []
+    for layer_idx, block in text_blocks:
+        if getattr(block, "_text_attention_logits", None) is None:
+            summaries.append(f"{_layer_label(layer_idx)} text_score(unavailable)")
+            continue
 
-    flat = logits.reshape(-1)
-    head0_query = logits[0, 0, 0].reshape(-1)
-    sample_count = min(sample_size, head0_query.numel())
-    sample_vals = ", ".join(f"{v:.4f}" for v in head0_query[:sample_count].tolist())
-    if head0_query.numel() > sample_count:
-        sample_vals = f"{sample_vals}, ..."
+        with torch.no_grad():
+            logits = block._text_attention_logits(text_train, text_test).detach().float().cpu()
 
-    return (
-        f"text_score(shape={tuple(logits.shape)}, "
-        f"mean/min/max={flat.mean().item():.4f}/{flat.min().item():.4f}/{flat.max().item():.4f}, "
-        f"head0_sample=[{sample_vals}])"
-    )
+        flat = logits.reshape(-1)
+        head0_query = logits[0, 0, 0].reshape(-1)
+        sample_count = min(sample_size, head0_query.numel())
+        sample_vals = ", ".join(f"{v:.4f}" for v in head0_query[:sample_count].tolist())
+        if head0_query.numel() > sample_count:
+            sample_vals = f"{sample_vals}, ..."
+
+        summaries.append(
+            f"{_layer_label(layer_idx)} text_score(shape={tuple(logits.shape)}, "
+            f"mean/min/max={flat.mean().item():.4f}/{flat.min().item():.4f}/{flat.max().item():.4f}, "
+            f"head0_sample=[{sample_vals}])"
+        )
+
+    return " || ".join(summaries)
 
 
 def _normalized_regression_loss(
@@ -518,13 +585,13 @@ def fine_tune_external_gate(
     text_val: np.ndarray,
 ) -> list[ValidationMaeCheckpoint]:
     """
-    Fine-tune only the last layer's text-mixing parameters.
+    Fine-tune only the text-enhanced blocks' text-mixing parameters.
 
     Why call the model directly?
     - `reg.predict()` disables gradients, so we can't optimize with it.
     - We still re-use everything from `reg.fit()`:
         - fitted imputers/scalers
-        - batching helpers that shape text inputs for the last-layer text module
+        - batching helpers that shape text inputs for the text-enhanced blocks
 
     Rolling window (per step inside each epoch):
     - Fixed context = global context + train rows before this batch
@@ -534,14 +601,15 @@ def fine_tune_external_gate(
     if tuning_cfg.early_stopping_patience <= 0:
         raise ValueError("early_stopping_patience must be positive.")
 
-    gate, gate_params, text_attn_params = freeze_all_but_last_text_mixing(reg)
+    _, gate_params, text_attn_params = freeze_all_but_last_text_mixing(reg)
+    text_block_labels = ", ".join(layer_label for layer_label, _ in get_text_enhanced_gate_params(reg))
     optimizer = build_text_mixing_optimizer(
         gate_params=gate_params,
         text_attn_params=text_attn_params,
         tuning_cfg=tuning_cfg,
     )
     print(
-        "Tuning last-layer text-mixing params "
+        f"Tuning text-mixing params on blocks [{text_block_labels}] "
         f"(loss_type={tuning_cfg.loss_type}, gate_lr={tuning_cfg.gate_lr}, "
         f"text_attn_lr={tuning_cfg.text_attn_lr}, optimizer={optimizer.__class__.__name__}, "
         f"early_stopping_metric={tuning_cfg.early_stopping_metric}, "
@@ -632,7 +700,8 @@ def fine_tune_external_gate(
 
             if tuning_cfg.gate_logit_clamp is not None:
                 with torch.no_grad():
-                    gate.clamp_(-tuning_cfg.gate_logit_clamp, tuning_cfg.gate_logit_clamp)
+                    for gate in gate_params:
+                        gate.clamp_(-tuning_cfg.gate_logit_clamp, tuning_cfg.gate_logit_clamp)
 
         train_loss, train_mae, _, _ = _evaluate_rolling_loss_and_mae(
             reg,
@@ -658,7 +727,7 @@ def fine_tune_external_gate(
             max_context=tuning_cfg.max_context,
             loss_type=tuning_cfg.loss_type,
         )
-        param_stats = get_trainining_info(reg, gate)
+        param_stats = get_trainining_info(reg)
         _print_epoch_section(
             epoch=epoch,
             train_loss=train_loss,
@@ -722,7 +791,9 @@ def fine_tune_external_gate(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Fine-tune last-layer text-mixing parameters on a configured dataset.")
+    parser = argparse.ArgumentParser(
+        description="Fine-tune text-mixing parameters on the final text-enhanced transformer layers."
+    )
     parser.add_argument("--dataset", help="Dataset key in the config file.")
     parser.add_argument("--config", required=True, help="Path to dataset config YAML.")
     args = parser.parse_args()
@@ -906,10 +977,10 @@ def main() -> None:
         )
         print(
             "Initial text-mixing params:",
-            get_trainining_info(reg, get_last_layer_gate_param(reg)),
+            get_trainining_info(reg),
         )
     else:
-        print("Initial text-mixing gate:", gate_stats(get_last_layer_gate_param(reg)))
+        print("Initial text-mixing gates:", text_mixing_gate_stats(reg))
 
     print("\n== Fine-tuning text-mixing parameters ==")
     top_validation_mae_checkpoints = fine_tune_external_gate(
@@ -1003,10 +1074,10 @@ def main() -> None:
         )
         print(
             "Tuned text-mixing params:",
-            get_trainining_info(reg, get_last_layer_gate_param(reg)),
+            get_trainining_info(reg),
         )
     else:
-        print("Tuned text-mixing gate:", gate_stats(get_last_layer_gate_param(reg)))
+        print("Tuned text-mixing gates:", text_mixing_gate_stats(reg))
 
     restored_best_state_dict = _clone_state_dict_to_cpu(reg.model.state_dict())
     print(f"\n== Top {len(top_validation_mae_checkpoints)} Validation-MAE Models On Test ==")

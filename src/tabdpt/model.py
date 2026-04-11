@@ -74,13 +74,8 @@ class TabDPTModel(nn.Module):
         y_src = self.y_encoder(y_src.unsqueeze(-1))
         train_x = x_src[:eval_pos] + y_src
         src = torch.cat([train_x, x_src[eval_pos:]], 0)
-        if text_train is None or text_test is None:
-            for layer in self.transformer_encoder:
-                src = layer(src, eval_pos)
-        else:
-            for layer in self.transformer_encoder[:-1]:
-                src = layer(src, eval_pos)
-            src = self.transformer_encoder[-1](src, eval_pos, text_train=text_train, text_test=text_test)
+        for layer in self.transformer_encoder:
+            src = layer(src, eval_pos, text_train=text_train, text_test=text_test)
         pred = self.head(src)
         if task == "reg":
             pred = pred[eval_pos:, ..., -1]
@@ -114,18 +109,20 @@ class TabDPTModel(nn.Module):
         model_state = {k.replace("model.", ""): v for k, v in model_state.items()}
         model.load_state_dict(model_state)
 
-        # Replace last transformer layer with text-enhanced version
+        # Replace the final transformer layers with text-enhanced versions.
         if text_enhanced:
-            last_idx = len(model.transformer_encoder) - 1
-            last_layer = model.transformer_encoder[last_idx]
-            model.transformer_encoder[last_idx] = TransformerEncoderLayer(
-                embed_dim=last_layer.embed_dim,
-                num_heads=last_layer.num_heads,
-                ff_dim=last_layer.ff[0].out_features,
-                text_enhanced=True,
-            )
-            # Copy pretrained weights to the new layer
-            model.transformer_encoder[last_idx].load_state_dict(last_layer.state_dict(), strict=False)
+            num_text_enhanced_layers = min(2, len(model.transformer_encoder))
+            first_text_layer_idx = len(model.transformer_encoder) - num_text_enhanced_layers
+            for layer_idx in range(first_text_layer_idx, len(model.transformer_encoder)):
+                base_layer = model.transformer_encoder[layer_idx]
+                model.transformer_encoder[layer_idx] = TransformerEncoderLayer(
+                    embed_dim=base_layer.embed_dim,
+                    num_heads=base_layer.num_heads,
+                    ff_dim=base_layer.ff[0].out_features,
+                    text_enhanced=True,
+                )
+                # Copy pretrained weights to the new layer while leaving text modules freshly initialized.
+                model.transformer_encoder[layer_idx].load_state_dict(base_layer.state_dict(), strict=False)
 
         model.to(config.env.device)
         model.eval()
