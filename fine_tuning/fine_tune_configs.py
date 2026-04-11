@@ -22,16 +22,15 @@ class TuningConfig:
     text_attn_lr: float
     gate_logit_clamp: float | None
     tune_batch_size: int
-    max_context_for_tune: int | None
-    max_context_for_eval: int | None
-    max_context_for_tune_eval: int | None
-    eval_each_epoch: bool
+    max_context: int | None
     debug_text_effect: bool
     log_text_mixing_params: bool
     step_log_every: int
+    early_stopping_patience: int
     loss_type: str = "l1"
     log_text_score_stats: bool = False
     text_score_sample_size: int = 8
+    early_stopping_metric: str = "mae"
 
 
 @dataclass(frozen=True)
@@ -45,8 +44,9 @@ class DataConfig:
     embedding_column_template: str | None
     max_rows: int | None
     context_ratio: float
-    tune_ratio: float
-    eval_ratio: float
+    train_ratio: float
+    val_ratio: float
+    test_ratio: float
     seed: int
     model: ModelConfig
     tuning: TuningConfig
@@ -67,6 +67,19 @@ def load_fine_tune_config(config_path: str, dataset_name: str | None) -> DataCon
     dataset_cfg.setdefault("embedding_lags", [])
     dataset_cfg.setdefault("embedding_columns", None)
     dataset_cfg.setdefault("embedding_column_template", None)
+    missing_data_keys = [
+        key
+        for key, field in DataConfig.__dataclass_fields__.items()
+        if key not in {"model", "tuning"}
+        and key not in dataset_cfg
+        and field.default is MISSING
+        and field.default_factory is MISSING
+    ]
+    if missing_data_keys:
+        raise ValueError(
+            "Fine-tune config is missing required data keys: "
+            + ", ".join(sorted(missing_data_keys))
+        )
     dataset_cfg["model"] = ModelConfig(**dataset_cfg["model"])
     missing_tuning_keys = [
         key
