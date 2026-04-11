@@ -27,7 +27,7 @@ embedding_columns:
 - embedding_summary_gpt-5-mini_lag3
 embedding_column_template: null
 seed: 0
-max_rows: 1000
+max_rows: 1200
 context_ratio: 0.2
 train_ratio: 0.5
 val_ratio: 0.1
@@ -40,14 +40,14 @@ model:
   compile_model: true
 tuning:
   epochs: 30
-  gate_lr: 0.01
-  text_attn_lr: 0.001
+  gate_lr: 0.1
+  text_attn_lr: 0.01
   gate_logit_clamp: 10.0
-  tune_batch_size: 650
-  max_context: 1000
+  tune_batch_size: 128
+  max_context: 500
   debug_text_effect: true
   log_text_mixing_params: true
   step_log_every: 50
-  early_stopping_patience: 5
+  early_stopping_patience: 10
   log_text_score_stats: true
   text_score_sample_size: 8

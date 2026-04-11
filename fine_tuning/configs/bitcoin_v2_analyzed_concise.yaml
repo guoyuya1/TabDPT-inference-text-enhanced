@@ -40,7 +40,7 @@ tuning:
   gate_lr: 0.1
   text_attn_lr: 0.01
   gate_logit_clamp: 10.0
-  tune_batch_size: 128
+  tune_batch_size: 256
   max_context: 500
   debug_text_effect: true
   log_text_mixing_params: true

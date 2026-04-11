@@ -11,14 +11,16 @@ text-mixing parameters:
 - the text attention projection used to score train/test text pairs
 
 Fine-tuning uses rolling one-step prediction on the train split, selects the
-best epoch by validation MAE with early stopping, restores the best text-mixing
-weights, and prints final held-out test metrics.
+best epoch by validation MAE with early stopping, keeps the top 3 validation-MAE
+checkpoints, restores the best text-mixing weights, and prints final held-out
+test metrics.
 """
 
 from __future__ import annotations
 
 import argparse
 import copy
+from dataclasses import dataclass
 
 import numpy as np
 import schedulefree  # type: ignore
@@ -48,6 +50,51 @@ except ImportError:
     from fine_tune_configs import TuningConfig, load_fine_tune_config
     from load_dataset import load_tabular_text_dataset
     from split_ts import time_split
+
+
+TOP_VALIDATION_MAE_MODELS = 3
+
+
+@dataclass(frozen=True)
+class ValidationMaeCheckpoint:
+    epoch: int
+    val_mae: float
+    state_dict: dict[str, torch.Tensor]
+
+
+def _clone_state_dict_to_cpu(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    cloned: dict[str, torch.Tensor] = {}
+    for name, value in state_dict.items():
+        if torch.is_tensor(value):
+            cloned[name] = value.detach().cpu().clone()
+        else:
+            cloned[name] = copy.deepcopy(value)
+    return cloned
+
+
+def _maybe_record_top_validation_mae_checkpoint(
+    checkpoints: list[ValidationMaeCheckpoint],
+    *,
+    epoch: int,
+    val_mae: float,
+    model: torch.nn.Module,
+    limit: int = TOP_VALIDATION_MAE_MODELS,
+) -> None:
+    candidate_key = (val_mae, epoch)
+    if len(checkpoints) >= limit:
+        worst_checkpoint = max(checkpoints, key=lambda checkpoint: (checkpoint.val_mae, checkpoint.epoch))
+        if candidate_key >= (worst_checkpoint.val_mae, worst_checkpoint.epoch):
+            return
+
+    checkpoints.append(
+        ValidationMaeCheckpoint(
+            epoch=epoch,
+            val_mae=val_mae,
+            state_dict=_clone_state_dict_to_cpu(model.state_dict()),
+        )
+    )
+    checkpoints.sort(key=lambda checkpoint: (checkpoint.val_mae, checkpoint.epoch))
+    del checkpoints[limit:]
 
 
 def load_tabdpt_regressor(
@@ -469,7 +516,7 @@ def fine_tune_external_gate(
     X_val_proc: np.ndarray,
     y_val: np.ndarray,
     text_val: np.ndarray,
-) -> None:
+) -> list[ValidationMaeCheckpoint]:
     """
     Fine-tune only the last layer's text-mixing parameters.
 
@@ -509,6 +556,7 @@ def fine_tune_external_gate(
     best_score = float("inf")
     best_epoch = 0
     best_state_dict: dict[str, torch.Tensor] | None = None
+    top_validation_mae_checkpoints: list[ValidationMaeCheckpoint] = []
     epochs_without_improvement = 0
     val_context_proc = np.concatenate((X_context_proc, X_train_proc))
     val_y_context = np.concatenate((y_context, y_train))
@@ -619,6 +667,12 @@ def fine_tune_external_gate(
             val_mae=val_mae,
             param_stats=param_stats,
         )
+        _maybe_record_top_validation_mae_checkpoint(
+            top_validation_mae_checkpoints,
+            epoch=epoch,
+            val_mae=val_mae,
+            model=reg.model,
+        )
         current_score = _early_stopping_score(
             metric_name=tuning_cfg.early_stopping_metric,
             mae=val_mae,
@@ -628,7 +682,7 @@ def fine_tune_external_gate(
         if current_score < best_score:
             best_score = current_score
             best_epoch = epoch
-            best_state_dict = copy.deepcopy(reg.model.state_dict())
+            best_state_dict = _clone_state_dict_to_cpu(reg.model.state_dict())
             epochs_without_improvement = 0
             print(
                 f"New best validation {tuning_cfg.early_stopping_metric.upper()}: "
@@ -652,9 +706,18 @@ def fine_tune_external_gate(
         f"Restored best text-mixing params from epoch {best_epoch:02d} "
         f"(validation {tuning_cfg.early_stopping_metric.upper()}={best_score:.4f})"
     )
+    print(
+        "Top validation-MAE checkpoints: "
+        + ", ".join(
+            f"#{rank} epoch {checkpoint.epoch:02d} (MAE={checkpoint.val_mae:.4f})"
+            for rank, checkpoint in enumerate(top_validation_mae_checkpoints, start=1)
+        )
+    )
 
     for p in reg.model.parameters():
         p.requires_grad_(False)
+
+    return top_validation_mae_checkpoints
 
 
 
@@ -849,7 +912,7 @@ def main() -> None:
         print("Initial text-mixing gate:", gate_stats(get_last_layer_gate_param(reg)))
 
     print("\n== Fine-tuning text-mixing parameters ==")
-    fine_tune_external_gate(
+    top_validation_mae_checkpoints = fine_tune_external_gate(
         reg,
         X_context_proc=X_context_proc,
         y_context=y_context,
@@ -944,6 +1007,25 @@ def main() -> None:
         )
     else:
         print("Tuned text-mixing gate:", gate_stats(get_last_layer_gate_param(reg)))
+
+    restored_best_state_dict = _clone_state_dict_to_cpu(reg.model.state_dict())
+    print(f"\n== Top {len(top_validation_mae_checkpoints)} Validation-MAE Models On Test ==")
+    for rank, checkpoint in enumerate(top_validation_mae_checkpoints, start=1):
+        reg.model.load_state_dict(checkpoint.state_dict)
+        print(f"Rank {rank} | Epoch {checkpoint.epoch:02d} | Val MAE: {checkpoint.val_mae:.4f}")
+        evaluate_rolling(
+            reg,
+            X_context_proc=test_context_proc,
+            y_context=test_y_context,
+            text_context=test_text_context,
+            X_eval_proc=X_test_proc,
+            y_eval=y_test,
+            text_eval=text_test,
+            use_text=True,
+            label=f"Test top {rank} (with text attn)",
+            max_context=run_cfg.tuning.max_context,
+        )
+    reg.model.load_state_dict(restored_best_state_dict)
 
 
 if __name__ == "__main__":
