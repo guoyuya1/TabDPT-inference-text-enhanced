@@ -153,7 +153,7 @@ class TransformerEncoderLayer(nn.Module):
             # Use only the first D dims from each raw text embedding before scoring.
             self.TEXT_ENHANCED_EMBED_DIM = 1024
             # Keep total text capacity fixed, but split it across attention heads.
-            self.TEXT_ENHANCED_TOTAL_DIM = 64
+            self.TEXT_ENHANCED_TOTAL_DIM = 128
             if self.TEXT_ENHANCED_TOTAL_DIM % num_heads != 0:
                 raise ValueError(
                     "Text semi-attention total width must be divisible by num_heads: "
