@@ -1,4 +1,4 @@
-data_path: data/processed_data/bitcoin/bitcoin_gpt_analyzed_baseline.csv
+data_path: data/processed_data/bitcoin/bitcoin_gpt_analyzed_baseline_text_lag_3_numeric_lag_3.csv
 date_column: Date
 numeric_features:
 - Open_lag1
