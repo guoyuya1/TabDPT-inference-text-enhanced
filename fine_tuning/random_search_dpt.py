@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import contextlib
 import copy
 import csv
 import json
+import multiprocessing
 import random
 import re
 import sys
@@ -112,6 +114,13 @@ class SharedBaselineResult:
     test_pca: SummaryMetrics
     test_truncate: SummaryMetrics | None
     test_truncate_label: str | None
+
+
+@dataclass(frozen=True)
+class TrialExecutionArtifacts:
+    result: RandomSearchTrialResult
+    checkpoint_path: str
+    assigned_device: str | None = None
 
 
 class _TeeWriter:
@@ -529,6 +538,211 @@ def execute_random_search_trial(
     return result, prepared_trial
 
 
+def _extract_gpu_id_from_device(device: str | None) -> int | None:
+    if not isinstance(device, str) or not device.startswith("cuda:"):
+        return None
+    _, _, gpu_id = device.partition(":")
+    if not gpu_id.isdigit():
+        raise ValueError(f"Unsupported CUDA device specifier: {device!r}")
+    return int(gpu_id)
+
+
+def _build_parallel_device_slots(
+    *,
+    max_parallel_trials: int,
+    gpu_ids: list[int] | None,
+    base_device: str | None,
+) -> list[str | None]:
+    if max_parallel_trials <= 0:
+        raise ValueError("max_parallel_trials must be positive.")
+
+    normalized_base_device = base_device.lower() if isinstance(base_device, str) else None
+    if normalized_base_device == "cpu":
+        return ["cpu"] * max_parallel_trials
+
+    resolved_gpu_ids = list(gpu_ids) if gpu_ids is not None else None
+    if resolved_gpu_ids is None:
+        explicit_gpu_id = _extract_gpu_id_from_device(base_device)
+        if explicit_gpu_id is not None:
+            resolved_gpu_ids = [explicit_gpu_id]
+        elif normalized_base_device == "cuda":
+            if not torch.cuda.is_available():
+                raise RuntimeError(
+                    "Parallel GPU execution was requested with model.device='cuda', "
+                    "but no CUDA devices are visible to PyTorch."
+                )
+            resolved_gpu_ids = list(range(torch.cuda.device_count()))
+        elif torch.cuda.is_available():
+            resolved_gpu_ids = list(range(torch.cuda.device_count()))
+
+    if resolved_gpu_ids:
+        visible_gpu_count = torch.cuda.device_count()
+        if visible_gpu_count == 0:
+            raise RuntimeError(
+                "Parallel GPU execution was requested, but no CUDA devices are visible to PyTorch."
+            )
+        invalid_gpu_ids = [gpu_id for gpu_id in resolved_gpu_ids if gpu_id >= visible_gpu_count]
+        if invalid_gpu_ids:
+            raise ValueError(
+                "Configured gpu_ids exceed the visible CUDA device count "
+                f"({visible_gpu_count}): {invalid_gpu_ids}"
+            )
+        return [
+            f"cuda:{resolved_gpu_ids[slot_index % len(resolved_gpu_ids)]}"
+            for slot_index in range(max_parallel_trials)
+        ]
+
+    fallback_device = base_device if base_device not in {None, "auto"} else None
+    return [fallback_device] * max_parallel_trials
+
+
+def _execute_trial_with_logging(
+    trial_cfg: DataConfig,
+    *,
+    trial_index: int,
+    data_splits: FineTuneDataSplits,
+    trial_log_path: str | Path,
+    checkpoint_path: str | Path,
+    assigned_device: str | None,
+    tee_stdout: bool,
+) -> TrialExecutionArtifacts:
+    resolved_trial_cfg = trial_cfg
+    if assigned_device is not None and assigned_device != trial_cfg.model.device:
+        resolved_trial_cfg = replace(
+            trial_cfg,
+            model=replace(trial_cfg.model, device=assigned_device),
+        )
+
+    trial_log_path = Path(trial_log_path)
+    checkpoint_path = Path(checkpoint_path)
+    with trial_log_path.open("w", encoding="utf-8", buffering=1) as log_file:
+        streams: tuple[Any, ...] = (sys.stdout, log_file) if tee_stdout else (log_file,)
+        tee_writer = _TeeWriter(*streams)
+        with contextlib.redirect_stdout(tee_writer), contextlib.redirect_stderr(tee_writer):
+            if assigned_device is not None:
+                print(f"Assigned device | {assigned_device}")
+            result, prepared_trial = execute_random_search_trial(
+                resolved_trial_cfg,
+                trial_index=trial_index,
+                data_splits=data_splits,
+            )
+
+    result = replace(result, best_epoch=_extract_best_epoch_from_trial_log(trial_log_path))
+    torch.save(_clone_state_dict_to_cpu(prepared_trial.reg.model.state_dict()), checkpoint_path)
+    return TrialExecutionArtifacts(
+        result=result,
+        checkpoint_path=str(checkpoint_path),
+        assigned_device=assigned_device,
+    )
+
+
+def _run_trial_batch(
+    trial_cfgs: dict[int, DataConfig],
+    *,
+    data_splits: FineTuneDataSplits,
+    logs_dir: Path,
+    checkpoints_dir: Path,
+    max_parallel_trials: int,
+    gpu_ids: list[int] | None,
+) -> tuple[list[RandomSearchTrialResult], dict[int, str]]:
+    trial_items = list(trial_cfgs.items())
+    if not trial_items:
+        return [], {}
+
+    if max_parallel_trials <= 1:
+        results: list[RandomSearchTrialResult] = []
+        checkpoint_paths: dict[int, str] = {}
+        for trial_index, trial_cfg in trial_items:
+            trial_log_path = logs_dir / f"trial_{trial_index:03d}.log"
+            checkpoint_path = checkpoints_dir / f"trial_{trial_index:03d}.pt"
+            artifacts = _execute_trial_with_logging(
+                trial_cfg,
+                trial_index=trial_index,
+                data_splits=data_splits,
+                trial_log_path=trial_log_path,
+                checkpoint_path=checkpoint_path,
+                assigned_device=None,
+                tee_stdout=True,
+            )
+            results.append(artifacts.result)
+            checkpoint_paths[trial_index] = artifacts.checkpoint_path
+        return results, checkpoint_paths
+
+    device_slots = _build_parallel_device_slots(
+        max_parallel_trials=max_parallel_trials,
+        gpu_ids=gpu_ids,
+        base_device=trial_items[0][1].model.device,
+    )
+    print(
+        "Parallel trial execution enabled | "
+        f"max_parallel_trials={max_parallel_trials} | "
+        f"device_slots={device_slots}"
+    )
+
+    results = []
+    checkpoint_paths = {}
+    mp_context = multiprocessing.get_context("spawn")
+    trial_iter = iter(trial_items)
+
+    with concurrent.futures.ProcessPoolExecutor(
+        max_workers=len(device_slots),
+        mp_context=mp_context,
+    ) as executor:
+        future_states: dict[concurrent.futures.Future[TrialExecutionArtifacts], tuple[int, str | None]] = {}
+
+        def submit_next(assigned_device: str | None) -> bool:
+            try:
+                next_trial_index, next_trial_cfg = next(trial_iter)
+            except StopIteration:
+                return False
+
+            future = executor.submit(
+                _execute_trial_with_logging,
+                next_trial_cfg,
+                trial_index=next_trial_index,
+                data_splits=data_splits,
+                trial_log_path=str(logs_dir / f"trial_{next_trial_index:03d}.log"),
+                checkpoint_path=str(checkpoints_dir / f"trial_{next_trial_index:03d}.pt"),
+                assigned_device=assigned_device,
+                tee_stdout=False,
+            )
+            future_states[future] = (next_trial_index, assigned_device)
+            print(
+                f"Started trial {next_trial_index:03d} | "
+                f"device={assigned_device or next_trial_cfg.model.device or 'auto'}"
+            )
+            return True
+
+        for assigned_device in device_slots:
+            if not submit_next(assigned_device):
+                break
+
+        while future_states:
+            done, _ = concurrent.futures.wait(
+                tuple(future_states),
+                return_when=concurrent.futures.FIRST_COMPLETED,
+            )
+            for future in done:
+                submitted_trial_index, assigned_device = future_states.pop(future)
+                artifacts = future.result()
+                result = artifacts.result
+                results.append(result)
+                checkpoint_paths[result.trial_index] = artifacts.checkpoint_path
+                print(
+                    f"Completed trial {result.trial_index:03d} | "
+                    f"device={artifacts.assigned_device or assigned_device or 'auto'} | "
+                    f"objective={result.ranking_score:.6f} | val_mae={result.val_mae:.6f}"
+                )
+                if result.trial_index != submitted_trial_index:
+                    raise RuntimeError(
+                        "Parallel trial bookkeeping mismatch: "
+                        f"submitted trial {submitted_trial_index} returned {result.trial_index}."
+                    )
+                submit_next(assigned_device)
+
+    return results, checkpoint_paths
+
+
 def _serialize_trial_result(
     result: RandomSearchTrialResult,
     *,
@@ -634,6 +848,8 @@ def _write_summary_json(
         "base_config": random_search_cfg.base_config,
         "base_dataset": random_search_cfg.base_dataset,
         "objective_metric": objective_metric,
+        "max_parallel_trials": random_search_cfg.max_parallel_trials,
+        "gpu_ids": random_search_cfg.gpu_ids,
         "baseline_evaluations_skipped_per_trial": True,
         "shared_baseline_evaluated": True,
         "shared_baseline": _serialize_shared_baseline_result(shared_baseline),
@@ -668,6 +884,8 @@ def _write_summary_log(
         f"base_config: {random_search_cfg.base_config}",
         f"base_dataset: {random_search_cfg.base_dataset}",
         f"objective_metric: {objective_metric}",
+        f"max_parallel_trials: {random_search_cfg.max_parallel_trials}",
+        f"gpu_ids: {random_search_cfg.gpu_ids}",
         "baseline_evaluations_skipped_per_trial: true",
         "shared_baseline_evaluated: true",
         f"requested_trials: {random_search_cfg.trials}",
@@ -815,41 +1033,33 @@ def run_random_search(
     output_dir.mkdir(parents=True, exist_ok=False)
     logs_dir = output_dir / "logs"
     logs_dir.mkdir(parents=True, exist_ok=False)
+    checkpoints_dir = output_dir / "checkpoints"
+    checkpoints_dir.mkdir(parents=True, exist_ok=False)
     shared_baseline = run_shared_baseline_evaluation(
         base_run_cfg,
         data_splits=data_splits,
         logs_dir=logs_dir,
     )
 
-    best_result: RandomSearchTrialResult | None = None
-    best_run_cfg: DataConfig | None = None
-    results: list[RandomSearchTrialResult] = []
     trial_cfgs: dict[int, DataConfig] = {}
-    tuned_state_dicts: dict[int, dict[str, Any]] = {}
-
     for trial_index, trial_spec in enumerate(trial_specs, start=1):
-        trial_cfg = resolve_trial_config(base_run_cfg, trial_spec)
-        trial_cfgs[trial_index] = trial_cfg
-        trial_log_path = logs_dir / f"trial_{trial_index:03d}.log"
-        with trial_log_path.open("w", encoding="utf-8") as log_file:
-            tee_writer = _TeeWriter(sys.stdout, log_file)
-            with contextlib.redirect_stdout(tee_writer), contextlib.redirect_stderr(tee_writer):
-                result, prepared_trial = execute_random_search_trial(
-                    trial_cfg,
-                    trial_index=trial_index,
-                    data_splits=data_splits,
-                )
-        result = replace(result, best_epoch=_extract_best_epoch_from_trial_log(trial_log_path))
-        results.append(result)
-        tuned_state_dicts[trial_index] = _clone_state_dict_to_cpu(prepared_trial.reg.model.state_dict())
-        if best_result is None or trial_sort_key(result) < trial_sort_key(best_result):
-            best_result = result
-            best_run_cfg = trial_cfg
+        trial_cfgs[trial_index] = resolve_trial_config(base_run_cfg, trial_spec)
 
-    if best_result is None or best_run_cfg is None:
+    results, checkpoint_paths = _run_trial_batch(
+        trial_cfgs,
+        data_splits=data_splits,
+        logs_dir=logs_dir,
+        checkpoints_dir=checkpoints_dir,
+        max_parallel_trials=random_search_cfg.max_parallel_trials,
+        gpu_ids=random_search_cfg.gpu_ids,
+    )
+
+    if not results:
         raise RuntimeError("Random search did not execute any trials.")
 
     ranked_results = sorted(results, key=trial_sort_key)
+    best_result = ranked_results[0]
+    best_run_cfg = trial_cfgs[best_result.trial_index]
     top_limit = min(random_search_cfg.top_k, len(ranked_results))
     print(f"\nEvaluating top {top_limit} ranked trial(s) on the test split...")
     ranked_results_with_test = list(ranked_results)
@@ -857,7 +1067,7 @@ def run_random_search(
     for rank, result in enumerate(ranked_results[:top_limit], start=1):
         trial_cfg = trial_cfgs[result.trial_index]
         prepared_trial = prepare_fine_tune_trial(trial_cfg, data_splits=data_splits)
-        prepared_trial.reg.model.load_state_dict(tuned_state_dicts[result.trial_index])
+        prepared_trial.reg.model.load_state_dict(torch.load(checkpoint_paths[result.trial_index], map_location="cpu"))
         test_metrics = evaluate_prepared_split(
             prepared_trial,
             split_name="test",
@@ -923,6 +1133,7 @@ def run_random_search(
     return {
         "output_dir": str(output_dir),
         "logs_dir": str(logs_dir),
+        "checkpoints_dir": str(checkpoints_dir),
         "ranked_results": ranked_results,
         "shared_baseline": shared_baseline,
         "best_test_metrics": RollingMetrics(

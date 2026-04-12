@@ -24,6 +24,13 @@ def _validate_positive_int(name: str, value: object) -> int:
     return validated
 
 
+def _validate_non_negative_int(name: str, value: object) -> int:
+    validated = _validate_int(name, value)
+    if validated < 0:
+        raise ValueError(f"{name} must be non-negative.")
+    return validated
+
+
 def _validate_choice_list(name: str, values: object) -> list[object] | None:
     if values is None:
         return None
@@ -86,6 +93,22 @@ def _validate_float_choices(
         if validated_value <= 0.0:
             raise ValueError(f"{name} must contain only positive numeric values.")
         validated_values.append(validated_value)
+    return validated_values
+
+
+def _validate_gpu_ids(name: str, values: object) -> list[int] | None:
+    raw_values = _validate_choice_list(name, values)
+    if raw_values is None:
+        return None
+
+    validated_values: list[int] = []
+    seen_values: set[int] = set()
+    for value in raw_values:
+        validated_value = _validate_non_negative_int(name, value)
+        if validated_value in seen_values:
+            raise ValueError(f"{name} must not contain duplicate GPU ids.")
+        validated_values.append(validated_value)
+        seen_values.add(validated_value)
     return validated_values
 
 
@@ -152,6 +175,8 @@ class RandomSearchConfig:
     seed: int
     search_space: SearchSpaceConfig
     base_dataset: str | None = None
+    max_parallel_trials: int = 1
+    gpu_ids: list[int] | None = None
     top_k: int = 10
 
     def __post_init__(self) -> None:
@@ -161,6 +186,12 @@ class RandomSearchConfig:
             raise ValueError("base_dataset must be a string or null.")
         object.__setattr__(self, "trials", _validate_positive_int("trials", self.trials))
         object.__setattr__(self, "seed", _validate_int("seed", self.seed))
+        object.__setattr__(
+            self,
+            "max_parallel_trials",
+            _validate_positive_int("max_parallel_trials", self.max_parallel_trials),
+        )
+        object.__setattr__(self, "gpu_ids", _validate_gpu_ids("gpu_ids", self.gpu_ids))
         object.__setattr__(self, "top_k", _validate_positive_int("top_k", self.top_k))
 
 
@@ -219,6 +250,8 @@ def load_random_search_config(config_path: str) -> RandomSearchConfig:
         base_dataset=config.get("base_dataset"),
         trials=config["trials"],
         seed=config["seed"],
+        max_parallel_trials=config.get("max_parallel_trials", 1),
+        gpu_ids=config.get("gpu_ids"),
         top_k=config.get("top_k", 10),
         search_space=SearchSpaceConfig(
             **{
