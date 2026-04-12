@@ -1,9 +1,9 @@
 data_path: data/processed_data/energy/Energy_gpt_analyzed_concise_text_lag_7_numeric_lag14.csv
 date_column: date
 numeric_features:
-# - OT_lag1
-# - OT_lag2
-# - OT_lag3
+- OT_lag1
+- OT_lag2
+- OT_lag3
 - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag1
 - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag2
 - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag3
@@ -44,7 +44,7 @@ test_ratio: 0.2
 model:
   device: auto
   model_weight_path: null
-  text_enhanced: true
+  text_attn_layers: [15, 16]
   use_flash: true
   compile_model: true
 tuning:

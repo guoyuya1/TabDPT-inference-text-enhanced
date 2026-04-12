@@ -19,7 +19,7 @@ test_ratio: 0.2
 model:
   device: auto
   model_weight_path: null
-  text_enhanced: true
+  text_attn_layers: [15, 16]
   use_flash: true
   compile_model: true
 tuning:

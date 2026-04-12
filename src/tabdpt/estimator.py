@@ -41,6 +41,10 @@ _HF_REPO_ID = "Layer6/TabDPT"
 CPU_INF_BATCH = 16
 
 
+def _is_cuda_device(device: str | None) -> bool:
+    return isinstance(device, str) and device.startswith("cuda")
+
+
 class TabDPTEstimator(BaseEstimator):
     @staticmethod
     def download_weights() -> str:
@@ -65,6 +69,7 @@ class TabDPTEstimator(BaseEstimator):
         compile: bool = True,
         model_weight_path: str | None = None,
         text_enhanced: bool = False,
+        text_attn_layers: list[int] | None = None,
     ):
         """
         Initializes the TabDPT Estimator
@@ -98,10 +103,11 @@ class TabDPTEstimator(BaseEstimator):
         """
         self.mode = mode
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self.inf_batch_size = inf_batch_size if self.device == "cuda" else min(inf_batch_size, CPU_INF_BATCH)
-        self.use_flash = use_flash and self.device == "cuda"
+        self.inf_batch_size = inf_batch_size if _is_cuda_device(self.device) else min(inf_batch_size, CPU_INF_BATCH)
+        self.use_flash = use_flash and _is_cuda_device(self.device)
         self.missing_indicators = missing_indicators
-        self.text_enhanced = text_enhanced
+        self.text_attn_layers = text_attn_layers
+        self.text_enhanced = text_enhanced or text_attn_layers is not None
 
         if model_weight_path:
             self.path = model_weight_path
@@ -115,16 +121,20 @@ class TabDPTEstimator(BaseEstimator):
             model_state = {k: f.get_tensor(k) for k in f.keys()}
 
         cfg.env.device = self.device
-        if not self.text_enhanced:
-            self.model = TabDPTModel.load(model_state=model_state, config=cfg, use_flash=self.use_flash, clip_sigma=clip_sigma)
-        else:
-            self.model = TabDPTModel.load(model_state=model_state, config=cfg, use_flash=self.use_flash, clip_sigma=clip_sigma, text_enhanced=True)
+        self.model = TabDPTModel.load(
+            model_state=model_state,
+            config=cfg,
+            use_flash=self.use_flash,
+            clip_sigma=clip_sigma,
+            text_enhanced=self.text_enhanced,
+            text_attn_layers=text_attn_layers,
+        )
         self.model.eval()
 
 
         self.max_features = self.model.num_features
         self.max_num_classes = self.model.n_out
-        self.compile = compile and self.device == "cuda"
+        self.compile = compile and _is_cuda_device(self.device)
         self.feature_reduction = feature_reduction
         self.faiss_metric = faiss_metric
         assert self.mode in ["cls", "reg"], "mode must be 'cls' or 'reg'"

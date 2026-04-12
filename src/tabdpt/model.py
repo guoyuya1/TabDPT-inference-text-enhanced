@@ -9,6 +9,40 @@ from torch.nn import GELU, LayerNorm, Linear
 from .utils import clip_outliers, flash_context, normalize_data
 
 
+def _resolve_text_attention_layer_numbers(
+    *,
+    text_attn_layers: list[int] | None,
+    text_enhanced: bool,
+    nlayers: int,
+) -> list[int]:
+    if text_attn_layers is None:
+        if not text_enhanced:
+            return []
+        num_text_enhanced_layers = min(2, nlayers)
+        first_text_layer_number = nlayers - num_text_enhanced_layers + 1
+        return list(range(first_text_layer_number, nlayers + 1))
+
+    if not text_attn_layers:
+        raise ValueError("text_attn_layers must be non-empty when provided.")
+
+    validated_layers: list[int] = []
+    seen_layers: set[int] = set()
+    for layer_num in text_attn_layers:
+        if isinstance(layer_num, bool) or not isinstance(layer_num, int):
+            raise ValueError("text_attn_layers must contain only 1-based integer layer numbers.")
+        if layer_num <= 0:
+            raise ValueError("text_attn_layers must contain only positive 1-based layer numbers.")
+        if layer_num > nlayers:
+            raise ValueError(
+                f"text_attn_layers contains out-of-range layer {layer_num}; model has {nlayers} layers."
+            )
+        if layer_num in seen_layers:
+            raise ValueError("text_attn_layers must not contain duplicate layer numbers.")
+        validated_layers.append(layer_num)
+        seen_layers.add(layer_num)
+    return validated_layers
+
+
 class TabDPTModel(nn.Module):
     def __init__(
         self,
@@ -74,13 +108,8 @@ class TabDPTModel(nn.Module):
         y_src = self.y_encoder(y_src.unsqueeze(-1))
         train_x = x_src[:eval_pos] + y_src
         src = torch.cat([train_x, x_src[eval_pos:]], 0)
-        if text_train is None or text_test is None:
-            for layer in self.transformer_encoder:
-                src = layer(src, eval_pos)
-        else:
-            for layer in self.transformer_encoder[:-1]:
-                src = layer(src, eval_pos)
-            src = self.transformer_encoder[-1](src, eval_pos, text_train=text_train, text_test=text_test)
+        for layer in self.transformer_encoder:
+            src = layer(src, eval_pos, text_train=text_train, text_test=text_test)
         pred = self.head(src)
         if task == "reg":
             pred = pred[eval_pos:, ..., -1]
@@ -96,7 +125,15 @@ class TabDPTModel(nn.Module):
         return pred
 
     @classmethod
-    def load(cls, model_state, config, use_flash, clip_sigma: float = 4., text_enhanced: bool = False):
+    def load(
+        cls,
+        model_state,
+        config,
+        use_flash,
+        clip_sigma: float = 4.,
+        text_enhanced: bool = False,
+        text_attn_layers: list[int] | None = None,
+    ):
         assert config.model.max_num_classes > 2
         model = TabDPTModel(
             dropout=config.training.dropout,
@@ -114,18 +151,25 @@ class TabDPTModel(nn.Module):
         model_state = {k.replace("model.", ""): v for k, v in model_state.items()}
         model.load_state_dict(model_state)
 
-        # Replace last transformer layer with text-enhanced version
-        if text_enhanced:
-            last_idx = len(model.transformer_encoder) - 1
-            last_layer = model.transformer_encoder[last_idx]
-            model.transformer_encoder[last_idx] = TransformerEncoderLayer(
-                embed_dim=last_layer.embed_dim,
-                num_heads=last_layer.num_heads,
-                ff_dim=last_layer.ff[0].out_features,
-                text_enhanced=True,
-            )
-            # Copy pretrained weights to the new layer
-            model.transformer_encoder[last_idx].load_state_dict(last_layer.state_dict(), strict=False)
+        text_attn_layer_numbers = _resolve_text_attention_layer_numbers(
+            text_attn_layers=text_attn_layers,
+            text_enhanced=text_enhanced,
+            nlayers=len(model.transformer_encoder),
+        )
+
+        # Replace the configured transformer layers with text-enhanced versions.
+        for layer_num in text_attn_layer_numbers:
+            layer_idx = layer_num - 1
+            if not model.transformer_encoder[layer_idx].text_enhanced:
+                base_layer = model.transformer_encoder[layer_idx]
+                model.transformer_encoder[layer_idx] = TransformerEncoderLayer(
+                    embed_dim=base_layer.embed_dim,
+                    num_heads=base_layer.num_heads,
+                    ff_dim=base_layer.ff[0].out_features,
+                    text_enhanced=True,
+                )
+                # Copy pretrained weights to the new layer while leaving text modules freshly initialized.
+                model.transformer_encoder[layer_idx].load_state_dict(base_layer.state_dict(), strict=False)
 
         model.to(config.env.device)
         model.eval()
@@ -234,7 +278,9 @@ class TransformerEncoderLayer(nn.Module):
         attn = self.out_proj(attn.reshape(B, L, self.num_heads * self.head_dim))
         x = x + attn
         x = x + self.ff(self.ff_norm(x))
-        return x.transpose(0, 1)
+        # Keep the sequence-first output contiguous so every encoder block sees
+        # the same input stride pattern under torch.compile.
+        return x.transpose(0, 1).contiguous()
 
 
 # from pytorch v2.8.0
