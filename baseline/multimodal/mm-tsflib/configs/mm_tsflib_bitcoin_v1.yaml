@@ -1,0 +1,32 @@
+data_path: data/source_data/bitcoin/v1/bitcoin_price_news.csv
+date_column: Date
+target_column: Adj_Close
+text_column: "summary_gpt-5-mini"
+max_rows: 1000
+
+train_ratio: 0.7
+val_ratio: 0.2
+
+seq_len: 30
+pred_len: 1
+
+scale: true
+
+# LLM settings
+llm_name: "openai-community/gpt2"
+max_token_len: 256
+text_batch_size: 16
+
+# Model hyper-params
+pool_type: "avg"       # avg | max | min | attention
+prompt_weight: 0.5
+kernel_size: 25
+
+# Training
+batch_size: 32
+train_epochs: 20
+patience: 3
+learning_rate: 1.0e-3
+learning_rate2: 1.0e-2
+
+#checkpoint_path: "./baseline/multimodal/mm_tsflib_best.pt"
