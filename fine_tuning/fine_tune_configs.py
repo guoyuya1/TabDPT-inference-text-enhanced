@@ -10,9 +10,12 @@ import yaml
 class ModelConfig:
     device: str | None
     model_weight_path: str | None
-    text_enhanced: bool
+    text_attn_layers: list[int]
     use_flash: bool
     compile_model: bool
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "text_attn_layers", _validate_text_attn_layers(self.text_attn_layers))
 
 
 @dataclass(frozen=True)
@@ -52,6 +55,26 @@ class DataConfig:
     tuning: TuningConfig
 
 
+def _validate_text_attn_layers(text_attn_layers: object) -> list[int]:
+    if not isinstance(text_attn_layers, list):
+        raise ValueError("model.text_attn_layers must be a list of 1-based encoder layer numbers.")
+    if not text_attn_layers:
+        raise ValueError("model.text_attn_layers must be non-empty.")
+
+    validated_layers: list[int] = []
+    seen_layers: set[int] = set()
+    for layer in text_attn_layers:
+        if isinstance(layer, bool) or not isinstance(layer, int):
+            raise ValueError("model.text_attn_layers must contain only integers.")
+        if layer <= 0:
+            raise ValueError("model.text_attn_layers must contain only positive 1-based layer numbers.")
+        if layer in seen_layers:
+            raise ValueError("model.text_attn_layers must not contain duplicate layer numbers.")
+        validated_layers.append(layer)
+        seen_layers.add(layer)
+    return validated_layers
+
+
 def load_dataset_config(config_path: str, dataset_name: str | None) -> dict:
     if not os.path.exists(config_path):
         raise FileNotFoundError(f"Dataset config not found: {config_path}")
@@ -80,7 +103,31 @@ def load_fine_tune_config(config_path: str, dataset_name: str | None) -> DataCon
             "Fine-tune config is missing required data keys: "
             + ", ".join(sorted(missing_data_keys))
         )
-    dataset_cfg["model"] = ModelConfig(**dataset_cfg["model"])
+    model_cfg = dict(dataset_cfg["model"])
+    if "text_enhanced" in model_cfg:
+        raise ValueError(
+            "Fine-tune config must use model.text_attn_layers and must not define the legacy "
+            "model.text_enhanced flag."
+        )
+    missing_model_keys = [
+        key
+        for key, field in ModelConfig.__dataclass_fields__.items()
+        if key not in model_cfg
+        and field.default is MISSING
+        and field.default_factory is MISSING
+    ]
+    if missing_model_keys:
+        raise ValueError(
+            "Fine-tune config is missing required model keys: "
+            + ", ".join(sorted(missing_model_keys))
+        )
+    unknown_model_keys = sorted(set(model_cfg) - set(ModelConfig.__dataclass_fields__))
+    if unknown_model_keys:
+        raise ValueError(
+            "Fine-tune config has unsupported model keys: "
+            + ", ".join(unknown_model_keys)
+        )
+    dataset_cfg["model"] = ModelConfig(**model_cfg)
     missing_tuning_keys = [
         key
         for key, field in TuningConfig.__dataclass_fields__.items()

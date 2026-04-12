@@ -1,5 +1,5 @@
 """
-Config-driven fine-tuning of TabDPT's text-mixing parameters in the final transformer layers.
+Config-driven fine-tuning of TabDPT's text-mixing parameters in configured transformer layers.
 
 This script expects a processed CSV with numeric features, a numeric target, and
 text embedding columns. It loads one YAML config, splits the data
@@ -37,7 +37,7 @@ try:
         evaluate_rolling_pca,
         evaluate_rolling_truncate_text,
     )
-    from .fine_tune_configs import TuningConfig, load_fine_tune_config
+    from .fine_tune_configs import DataConfig, TuningConfig, load_fine_tune_config
     from .load_dataset import load_tabular_text_dataset
     from .split_ts import time_split
 except ImportError:
@@ -47,7 +47,7 @@ except ImportError:
         evaluate_rolling_pca,
         evaluate_rolling_truncate_text,
     )
-    from fine_tune_configs import TuningConfig, load_fine_tune_config
+    from fine_tune_configs import DataConfig, TuningConfig, load_fine_tune_config
     from load_dataset import load_tabular_text_dataset
     from split_ts import time_split
 
@@ -60,6 +60,40 @@ class ValidationMaeCheckpoint:
     epoch: int
     val_mae: float
     state_dict: dict[str, torch.Tensor]
+
+
+@dataclass(frozen=True)
+class FineTuneDataSplits:
+    X_context: np.ndarray
+    y_context: np.ndarray
+    text_context: np.ndarray
+    X_train: np.ndarray
+    y_train: np.ndarray
+    text_train: np.ndarray
+    X_val: np.ndarray
+    y_val: np.ndarray
+    text_val: np.ndarray
+    X_test: np.ndarray
+    y_test: np.ndarray
+    text_test: np.ndarray
+
+
+@dataclass(frozen=True)
+class PreparedFineTuneTrial:
+    reg: TabDPTRegressor
+    splits: FineTuneDataSplits
+    X_context_proc: np.ndarray
+    X_train_proc: np.ndarray
+    X_val_proc: np.ndarray
+    X_test_proc: np.ndarray
+
+
+@dataclass(frozen=True)
+class RollingMetrics:
+    loss: float
+    mae: float
+    rmse: float
+    mape: float
 
 
 def _clone_state_dict_to_cpu(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
@@ -101,7 +135,7 @@ def load_tabdpt_regressor(
     *,
     device: str | None,
     model_weight_path: str | None,
-    text_enhanced: bool,
+    text_attn_layers: list[int],
     use_flash: bool,
     compile_model: bool,
 ) -> TabDPTRegressor:
@@ -109,7 +143,7 @@ def load_tabdpt_regressor(
         device = "cuda" if torch.cuda.is_available() else "cpu"
     return TabDPTRegressor(
         device=device,
-        text_enhanced=text_enhanced,
+        text_attn_layers=text_attn_layers,
         model_weight_path=model_weight_path,
         use_flash=use_flash,
         compile=compile_model,
@@ -143,6 +177,137 @@ def preprocess_features(
         X_proc = X_proc[:, reduction_payload][:, :reg.max_features]
 
     return X_proc.astype(np.float32)
+
+
+def set_random_seeds(seed: int) -> None:
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
+
+def load_fine_tune_arrays(run_cfg: DataConfig) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    X, y, text = load_tabular_text_dataset(
+        path=run_cfg.data_path,
+        date_column=run_cfg.date_column,
+        numeric_features=run_cfg.numeric_features,
+        target_column=run_cfg.target_column,
+        embedding_lags=run_cfg.embedding_lags,
+        embedding_columns=run_cfg.embedding_columns,
+        embedding_column_template=run_cfg.embedding_column_template,
+        max_rows=run_cfg.max_rows,
+    )
+    if X.shape[1] == 0:
+        X = np.zeros((X.shape[0], 1), dtype=np.float32)
+    return X, y, text
+
+
+def split_fine_tune_data(
+    run_cfg: DataConfig,
+    *,
+    X: np.ndarray,
+    y: np.ndarray,
+    text: np.ndarray,
+) -> FineTuneDataSplits:
+    return FineTuneDataSplits(
+        *time_split(
+            X,
+            y,
+            text,
+            context_ratio=run_cfg.context_ratio,
+            train_ratio=run_cfg.train_ratio,
+            val_ratio=run_cfg.val_ratio,
+            test_ratio=run_cfg.test_ratio,
+        )
+    )
+
+
+def load_and_split_fine_tune_data(run_cfg: DataConfig) -> FineTuneDataSplits:
+    X, y, text = load_fine_tune_arrays(run_cfg)
+    return split_fine_tune_data(run_cfg, X=X, y=y, text=text)
+
+
+def prepare_fine_tune_trial(
+    run_cfg: DataConfig,
+    *,
+    data_splits: FineTuneDataSplits | None = None,
+) -> PreparedFineTuneTrial:
+    if data_splits is None:
+        data_splits = load_and_split_fine_tune_data(run_cfg)
+
+    reg = load_tabdpt_regressor(
+        device=run_cfg.model.device,
+        model_weight_path=run_cfg.model.model_weight_path,
+        text_attn_layers=run_cfg.model.text_attn_layers,
+        use_flash=run_cfg.model.use_flash,
+        compile_model=run_cfg.model.compile_model,
+    )
+    reg.fit(data_splits.X_context, data_splits.y_context, data_splits.text_context)
+
+    reduction_mode = None
+    reduction_payload = None
+    return PreparedFineTuneTrial(
+        reg=reg,
+        splits=data_splits,
+        X_context_proc=preprocess_features(
+            reg,
+            data_splits.X_context,
+            reduction_mode=reduction_mode,
+            reduction_payload=reduction_payload,
+        ),
+        X_train_proc=preprocess_features(
+            reg,
+            data_splits.X_train,
+            reduction_mode=reduction_mode,
+            reduction_payload=reduction_payload,
+        ),
+        X_val_proc=preprocess_features(
+            reg,
+            data_splits.X_val,
+            reduction_mode=reduction_mode,
+            reduction_payload=reduction_payload,
+        ),
+        X_test_proc=preprocess_features(
+            reg,
+            data_splits.X_test,
+            reduction_mode=reduction_mode,
+            reduction_payload=reduction_payload,
+        ),
+    )
+
+
+def _prepared_eval_inputs(
+    prepared_trial: PreparedFineTuneTrial,
+    *,
+    split_name: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    splits = prepared_trial.splits
+    if split_name == "train":
+        return (
+            prepared_trial.X_context_proc,
+            splits.y_context,
+            splits.text_context,
+            prepared_trial.X_train_proc,
+            splits.y_train,
+            splits.text_train,
+        )
+    if split_name == "val":
+        return (
+            np.concatenate((prepared_trial.X_context_proc, prepared_trial.X_train_proc)),
+            np.concatenate((splits.y_context, splits.y_train)),
+            np.concatenate((splits.text_context, splits.text_train), axis=0),
+            prepared_trial.X_val_proc,
+            splits.y_val,
+            splits.text_val,
+        )
+    if split_name == "test":
+        return (
+            np.concatenate((prepared_trial.X_context_proc, prepared_trial.X_train_proc, prepared_trial.X_val_proc)),
+            np.concatenate((splits.y_context, splits.y_train, splits.y_val)),
+            np.concatenate((splits.text_context, splits.text_train, splits.text_val), axis=0),
+            prepared_trial.X_test_proc,
+            splits.y_test,
+            splits.text_test,
+        )
+    raise ValueError(f"Unsupported split_name: {split_name!r}. Expected 'train', 'val', or 'test'.")
 
 
 def _layer_label(layer_idx: int) -> str:
@@ -555,6 +720,32 @@ def _evaluate_rolling_loss_and_mae(
     return avg_loss, mae, rmse, mape
 
 
+def evaluate_prepared_split(
+    prepared_trial: PreparedFineTuneTrial,
+    *,
+    split_name: str,
+    use_text: bool,
+    tuning_cfg: TuningConfig,
+) -> RollingMetrics:
+    X_context_proc, y_context, text_context, X_eval_proc, y_eval, text_eval = _prepared_eval_inputs(
+        prepared_trial,
+        split_name=split_name,
+    )
+    loss, mae, rmse, mape = _evaluate_rolling_loss_and_mae(
+        prepared_trial.reg,
+        X_context_proc=X_context_proc,
+        y_context=y_context,
+        text_context=text_context,
+        X_eval_proc=X_eval_proc,
+        y_eval=y_eval,
+        text_eval=text_eval,
+        use_text=use_text,
+        max_context=tuning_cfg.max_context,
+        loss_type=tuning_cfg.loss_type,
+    )
+    return RollingMetrics(loss=loss, mae=mae, rmse=rmse, mape=mape)
+
+
 def _print_epoch_section(
     *,
     epoch: int,
@@ -568,6 +759,27 @@ def _print_epoch_section(
     print(f"Train  | Loss: {train_loss:.4f} | MAE: {train_mae:.4f}")
     print(f"Val    | Loss: {val_loss:.4f} | MAE: {val_mae:.4f}")
     print(f"Params | {param_stats}")
+
+
+def fine_tune_prepared_trial(
+    prepared_trial: PreparedFineTuneTrial,
+    *,
+    tuning_cfg: TuningConfig,
+) -> list[ValidationMaeCheckpoint]:
+    splits = prepared_trial.splits
+    return fine_tune_external_gate(
+        prepared_trial.reg,
+        X_context_proc=prepared_trial.X_context_proc,
+        y_context=splits.y_context,
+        text_context=splits.text_context,
+        X_train_proc=prepared_trial.X_train_proc,
+        y_train=splits.y_train,
+        text_train=splits.text_train,
+        tuning_cfg=tuning_cfg,
+        X_val_proc=prepared_trial.X_val_proc,
+        y_val=splits.y_val,
+        text_val=splits.text_val,
+    )
 
 
 def fine_tune_external_gate(
@@ -799,89 +1011,34 @@ def main() -> None:
     args = parser.parse_args()
 
     run_cfg = load_fine_tune_config(args.config, args.dataset)
-    torch.manual_seed(run_cfg.seed)
-    np.random.seed(run_cfg.seed)
+    set_random_seeds(run_cfg.seed)
 
     if args.dataset:
         print(f"Using dataset '{args.dataset}' from {args.config}")
     else:
         print(f"Using dataset config {args.config}")
 
-    X, y, text = load_tabular_text_dataset(
-        path=run_cfg.data_path,
-        date_column=run_cfg.date_column,
-        numeric_features=run_cfg.numeric_features,
-        target_column=run_cfg.target_column,
-        embedding_lags=run_cfg.embedding_lags,
-        embedding_columns=run_cfg.embedding_columns,
-        embedding_column_template=run_cfg.embedding_column_template,
-        max_rows=run_cfg.max_rows,
-    )
-    if X.shape[1] == 0:
-        X = np.zeros((X.shape[0], 1), dtype=np.float32)
-
-    (
-        X_context,
-        y_context,
-        text_context,
-        X_train,
-        y_train,
-        text_train,
-        X_val,
-        y_val,
-        text_val,
-        X_test,
-        y_test,
-        text_test,
-    ) = time_split(
-        X,
-        y,
-        text,
-        context_ratio=run_cfg.context_ratio,
-        train_ratio=run_cfg.train_ratio,
-        val_ratio=run_cfg.val_ratio,
-        test_ratio=run_cfg.test_ratio,
-    )
+    data_splits = load_and_split_fine_tune_data(run_cfg)
     print(
         "Split sizes: "
-        f"context={len(y_context)} train={len(y_train)} val={len(y_val)} test={len(y_test)}"
+        f"context={len(data_splits.y_context)} train={len(data_splits.y_train)} "
+        f"val={len(data_splits.y_val)} test={len(data_splits.y_test)}"
     )
 
-    reg = load_tabdpt_regressor(
-        device=run_cfg.model.device,
-        model_weight_path=run_cfg.model.model_weight_path,
-        text_enhanced=run_cfg.model.text_enhanced,
-        use_flash=run_cfg.model.use_flash,
-        compile_model=run_cfg.model.compile_model,
-    )
-    reg.fit(X_context, y_context, text_context)
-
-    reduction_mode = None
-    reduction_payload = None
-    X_context_proc = preprocess_features(
-        reg,
-        X_context,
-        reduction_mode=reduction_mode,
-        reduction_payload=reduction_payload,
-    )
-    X_train_proc = preprocess_features(
-        reg,
-        X_train,
-        reduction_mode=reduction_mode,
-        reduction_payload=reduction_payload,
-    )
-    X_val_proc = preprocess_features(
-        reg,
-        X_val,
-        reduction_mode=reduction_mode,
-        reduction_payload=reduction_payload,
-    )
-    X_test_proc = preprocess_features(
-        reg,
-        X_test,
-        reduction_mode=reduction_mode,
-        reduction_payload=reduction_payload,
-    )
+    prepared_trial = prepare_fine_tune_trial(run_cfg, data_splits=data_splits)
+    reg = prepared_trial.reg
+    X_context_proc = prepared_trial.X_context_proc
+    X_train_proc = prepared_trial.X_train_proc
+    X_val_proc = prepared_trial.X_val_proc
+    X_test_proc = prepared_trial.X_test_proc
+    y_context = data_splits.y_context
+    text_context = data_splits.text_context
+    y_train = data_splits.y_train
+    text_train = data_splits.text_train
+    y_val = data_splits.y_val
+    text_val = data_splits.text_val
+    y_test = data_splits.y_test
+    text_test = data_splits.text_test
 
     print("\n== Baseline (before tuning) ==")
     baseline_no_text_train = evaluate_rolling(
@@ -983,18 +1140,9 @@ def main() -> None:
         print("Initial text-mixing gates:", text_mixing_gate_stats(reg))
 
     print("\n== Fine-tuning text-mixing parameters ==")
-    top_validation_mae_checkpoints = fine_tune_external_gate(
-        reg,
-        X_context_proc=X_context_proc,
-        y_context=y_context,
-        text_context=text_context,
-        X_train_proc=X_train_proc,
-        y_train=y_train,
-        text_train=text_train,
+    top_validation_mae_checkpoints = fine_tune_prepared_trial(
+        prepared_trial,
         tuning_cfg=run_cfg.tuning,
-        X_val_proc=X_val_proc,
-        y_val=y_val,
-        text_val=text_val,
     )
 
     print("\n== After tuning ==")

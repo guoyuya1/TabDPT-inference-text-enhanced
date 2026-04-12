@@ -25,6 +25,7 @@ class TabDPTRegressor(TabDPTEstimator, RegressorMixin):
         compile: bool = True,
         model_weight_path: str | None = None,
         text_enhanced: bool = False,
+        text_attn_layers: list[int] | None = None,
     ):
         super().__init__(
             mode="reg",
@@ -39,6 +40,7 @@ class TabDPTRegressor(TabDPTEstimator, RegressorMixin):
             compile=compile,
             model_weight_path=model_weight_path,
             text_enhanced=text_enhanced,
+            text_attn_layers=text_attn_layers,
         )
 
     @torch.no_grad()
