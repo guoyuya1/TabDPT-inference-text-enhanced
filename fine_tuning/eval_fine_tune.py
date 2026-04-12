@@ -8,8 +8,11 @@ from tabdpt import TabDPTRegressor
 from tabdpt.utils import pad_x
 
 
+METRIC_LABEL_WIDTH = 28
+
+
 def _format_metrics(label: str, mae: float, rmse: float, mape: float) -> None:
-    print(f"{label} | MAE: {mae:.4f} | RMSE: {rmse:.4f} | MAPE: {mape:.4f}%")
+    print(f"{label:<{METRIC_LABEL_WIDTH}} | MAE: {mae:.4f} | RMSE: {rmse:.4f} | MAPE: {mape:.4f}%")
 
 
 def _compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> tuple[float, float, float]:
