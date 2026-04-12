@@ -8,8 +8,11 @@ from tabdpt import TabDPTRegressor
 from tabdpt.utils import pad_x
 
 
+METRIC_LABEL_WIDTH = 28
+
+
 def _format_metrics(label: str, mae: float, rmse: float, mape: float) -> None:
-    print(f"{label} | MAE: {mae:.4f} | RMSE: {rmse:.4f} | MAPE: {mape:.4f}%")
+    print(f"{label:<{METRIC_LABEL_WIDTH}} | MAE: {mae:.4f} | RMSE: {rmse:.4f} | MAPE: {mape:.4f}%")
 
 
 def _compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> tuple[float, float, float]:
@@ -194,12 +197,12 @@ def evaluate_rolling(
             if use_text:
                 train_text_batch = text_train_step[None, ...]
                 test_text_batch = text_eval[idx:idx + 1][None, ...]
-                text_enhanced_attn_weight = reg._compute_attn_weight_pairwise_avg(
+                text_train_b, text_test_b = reg.text_embeddings_batched(
                     train_text_batch,
                     test_text_batch,
                 )
             else:
-                text_enhanced_attn_weight = None
+                text_train_b = text_test_b = None
 
             X_train_tensor = torch.tensor(X_train_step, dtype=torch.float32, device=reg.device).unsqueeze(0)
             X_train_tensor = pad_x(X_train_tensor, reg.max_features)
@@ -211,7 +214,8 @@ def evaluate_rolling(
                 x_src=torch.cat([X_train_tensor, X_test_tensor], dim=1),
                 y_src=y_context_tensor.unsqueeze(-1),
                 task="reg",
-                text_enhanced_attn_weight=text_enhanced_attn_weight,
+                text_train=text_train_b,
+                text_test=text_test_b,
             )
             pred, _, _ = pred
             preds[idx] = pred.squeeze(-1).reshape(-1).detach().cpu().numpy()[0]
@@ -284,7 +288,6 @@ def evaluate_rolling_pca(
                 x_src=torch.cat([X_train_tensor, X_test_tensor], dim=1),
                 y_src=y_context_tensor.unsqueeze(-1),
                 task="reg",
-                text_enhanced_attn_weight=None,
             )
             pred, _, _ = pred
             preds[idx] = pred.squeeze(-1).reshape(-1).detach().cpu().numpy()[0]
@@ -369,7 +372,6 @@ def evaluate_rolling_truncate_text(
                 x_src=torch.cat([X_train_tensor, X_test_tensor], dim=1),
                 y_src=y_context_tensor.unsqueeze(-1),
                 task="reg",
-                text_enhanced_attn_weight=None,
             )
             pred, _, _ = pred
             preds[idx] = pred.squeeze(-1).reshape(-1).detach().cpu().numpy()[0]

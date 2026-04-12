@@ -41,6 +41,10 @@ _HF_REPO_ID = "Layer6/TabDPT"
 CPU_INF_BATCH = 16
 
 
+def _is_cuda_device(device: str | None) -> bool:
+    return isinstance(device, str) and device.startswith("cuda")
+
+
 class TabDPTEstimator(BaseEstimator):
     @staticmethod
     def download_weights() -> str:
@@ -65,6 +69,7 @@ class TabDPTEstimator(BaseEstimator):
         compile: bool = True,
         model_weight_path: str | None = None,
         text_enhanced: bool = False,
+        text_attn_layers: list[int] | None = None,
     ):
         """
         Initializes the TabDPT Estimator
@@ -98,10 +103,11 @@ class TabDPTEstimator(BaseEstimator):
         """
         self.mode = mode
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self.inf_batch_size = inf_batch_size if self.device == "cuda" else min(inf_batch_size, CPU_INF_BATCH)
-        self.use_flash = use_flash and self.device == "cuda"
+        self.inf_batch_size = inf_batch_size if _is_cuda_device(self.device) else min(inf_batch_size, CPU_INF_BATCH)
+        self.use_flash = use_flash and _is_cuda_device(self.device)
         self.missing_indicators = missing_indicators
-        self.text_enhanced = text_enhanced
+        self.text_attn_layers = text_attn_layers
+        self.text_enhanced = text_enhanced or text_attn_layers is not None
 
         if model_weight_path:
             self.path = model_weight_path
@@ -115,16 +121,20 @@ class TabDPTEstimator(BaseEstimator):
             model_state = {k: f.get_tensor(k) for k in f.keys()}
 
         cfg.env.device = self.device
-        if not self.text_enhanced:
-            self.model = TabDPTModel.load(model_state=model_state, config=cfg, use_flash=self.use_flash, clip_sigma=clip_sigma)
-        else:
-            self.model = TabDPTModel.load(model_state=model_state, config=cfg, use_flash=self.use_flash, clip_sigma=clip_sigma, text_enhanced=True)
+        self.model = TabDPTModel.load(
+            model_state=model_state,
+            config=cfg,
+            use_flash=self.use_flash,
+            clip_sigma=clip_sigma,
+            text_enhanced=self.text_enhanced,
+            text_attn_layers=text_attn_layers,
+        )
         self.model.eval()
 
 
         self.max_features = self.model.num_features
         self.max_num_classes = self.model.n_out
-        self.compile = compile and self.device == "cuda"
+        self.compile = compile and _is_cuda_device(self.device)
         self.feature_reduction = feature_reduction
         self.faiss_metric = faiss_metric
         assert self.mode in ["cls", "reg"], "mode must be 'cls' or 'reg'"
@@ -166,7 +176,7 @@ class TabDPTEstimator(BaseEstimator):
             # text is a 3D array: (N, L, D)
             assert isinstance(text, np.ndarray), "text must be a numpy array"
             assert text.shape[0] == X.shape[0], "text and X must have the same number of samples"
-            assert text.ndim == 3, "text must be a 2D array"
+            assert text.ndim == 3, "text must be a 3D array (N, L, D)"
 
         if self.missing_indicators:
             inds = np.isnan(X)
@@ -231,43 +241,31 @@ class TabDPTEstimator(BaseEstimator):
             # (L, N_test, N_train): cosine similarity for each text feature independently.
             # e.g. result[0, 0, 5] = cosine_sim(test_sample_0_lag1, train_sample_5_lag1)
             return torch.einsum("n t d, m t d -> t n m", test_norm, train_norm) # (L, N_test, N_train)
-           
-            
-    
-    # text enhancement
-    def _compute_attn_weight_pairwise_avg(
-        self,
-        train_text: Union[np.ndarray, torch.Tensor],
-        text_test: Union[np.ndarray, torch.Tensor],
-        text_scale_factor: float = 1.0,
-    ) -> torch.Tensor:
-        sim_by_text_feature = self._compute_pairwise_text_similarity(train_text, text_test)
-        
-        # Check if batched (4D) or not (3D)
-        has_batch = len(sim_by_text_feature.shape) == 4
-        scale = torch.as_tensor(text_scale_factor, device=sim_by_text_feature.device, dtype=sim_by_text_feature.dtype)
-        
-        if has_batch:
-            # Batched: (B, L, N_test, N_train)
-            # Mean over lag dimension (L) - equivalent to non-batched mean(dim=0) but with batch dim
-            logits = sim_by_text_feature.mean(dim=1) * scale  # (B, N_test, N_train)
-            # Softmax over train dimension - equivalent to non-batched softmax(dim=-1)
-            attn_weight = torch.softmax(logits, dim=-1)  # (B, N_test, N_train)
-            
-            # Add N_train x N_train zeros matrix on top for each batch
-            # N_train here is the context size (from the batch), not the full training set size
-            B, N_test, N_train_context = attn_weight.shape
-            zeros_top = torch.zeros(B, N_train_context, N_train_context, device=attn_weight.device, dtype=attn_weight.dtype)  # (B, N_train_context, N_train_context)
-            return torch.cat([zeros_top, attn_weight], dim=1)  # (B, N_train_context + N_test, N_train_context)
+
+    def text_embeddings_batched(
+        self, train_text: Union[np.ndarray, torch.Tensor], text_test: Union[np.ndarray, torch.Tensor]
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Convert train/test text to (B, N_train, L, D) and (B, N_test, L, D) on the estimator device.
+        Used as `text_train` / `text_test` in TabDPTModel.forward when text_enhanced.
+        """
+        if isinstance(train_text, torch.Tensor):
+            tt = train_text.to(device=self.device, dtype=torch.float32)
         else:
-            # Non-batched: (L, N_test, N_train)
-            logits = sim_by_text_feature.mean(dim=0) * scale  # (N_test, N_train)
-            attn_weight = torch.softmax(logits, dim=-1)  # (N_test, N_train)
-            
-            # Add N_train x N_train zeros matrix on top
-            N_train = self.X_train.shape[0]
-            zeros_top = torch.zeros(N_train, N_train, device=attn_weight.device, dtype=attn_weight.dtype)  # (N_train, N_train)
-            return torch.cat([zeros_top, attn_weight], dim=0)  # (N_train + N_test, N_train)
+            tt = torch.as_tensor(train_text, dtype=torch.float32, device=self.device)
+        if isinstance(text_test, torch.Tensor):
+            ts = text_test.to(device=self.device, dtype=torch.float32)
+        else:
+            ts = torch.as_tensor(text_test, dtype=torch.float32, device=self.device)
+        if tt.dim() == 3:
+            tt = tt.unsqueeze(0)
+        if ts.dim() == 3:
+            # KNN path: tt is (B, N_train, L, D) and ts is (B, L, D) with one test row per batch row.
+            if tt.dim() == 4 and ts.shape[0] == tt.shape[0]:
+                ts = ts.unsqueeze(1)
+            else:
+                ts = ts.unsqueeze(0)
+        return tt, ts
 
     def _prepare_prediction(self, X: np.ndarray, class_perm: np.ndarray | None = None, seed: int | None = None, text: np.ndarray | None = None):
         check_is_fitted(self)

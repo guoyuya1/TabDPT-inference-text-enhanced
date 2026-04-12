@@ -1,9 +1,9 @@
 data_path: data/processed_data/energy/Energy_gpt_analyzed_concise_text_lag_7_numeric_lag14.csv
 date_column: date
 numeric_features:
-# - OT_lag1
-# - OT_lag2
-# - OT_lag3
+- OT_lag1
+- OT_lag2
+- OT_lag3
 - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag1
 - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag2
 - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag3
@@ -38,24 +38,24 @@ embedding_column_template: null
 seed: 0
 max_rows: 1000
 context_ratio: 0.2
-tune_ratio: 0.65
-eval_ratio: 0.15
+train_ratio: 0.5
+val_ratio: 0.1
+test_ratio: 0.2
 model:
   device: auto
   model_weight_path: null
-  text_enhanced: true
+  text_attn_layers: [15, 16]
   use_flash: true
   compile_model: true
 tuning:
   epochs: 100
   gate_lr: 0.5
+  text_attn_lr: 0.05
   gate_logit_clamp: 10.0
   tune_batch_size: 650
-  max_context_for_tune: 1000
-  max_context_for_eval: 1000
-  max_context_for_tune_eval: 1000
-  eval_each_epoch: false
+  max_context: 1000
   debug_text_effect: true
   log_text_mixing_params: true
   step_log_every: 50
+  early_stopping_patience: 5
   loss_type: l1
