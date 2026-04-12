@@ -17,6 +17,7 @@ numeric_features:
 - Adj_Close_lag2
 - Adj_Close_lag3
 target_column: Adj_Close
+prediction_window: 1
 embedding_lags: []
 embedding_columns:
 - embedding_summary_gpt-5.2_lag1

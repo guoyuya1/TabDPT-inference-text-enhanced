@@ -4,6 +4,7 @@ numeric_features:
 - Exports
 - Imports
 target_column: OT
+prediction_window: 1
 embedding_lags: []
 embedding_columns:
 - embedding_search_fact_summary_gpt_5_2_lag1

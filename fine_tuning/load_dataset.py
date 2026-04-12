@@ -64,5 +64,46 @@ def load_tabular_text_dataset(
     return X, y, text
 
 
+def build_direct_multi_horizon_dataset(
+    X: np.ndarray,
+    y: np.ndarray,
+    text: np.ndarray,
+    *,
+    prediction_window: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Build aligned direct-forecast targets for horizons 1..prediction_window.
+
+    Row `t` is treated as the prediction origin whose features already encode the
+    history available at that timestamp. Horizon `h` therefore uses row `t` to
+    predict target `y[t + h - 1]`.
+
+    Returns:
+    - X_aligned: (N', F) shared features for all horizons
+    - Y_multi: (N', H) horizon-specific targets, column h-1 predicts h steps ahead
+    - text_aligned: (N', L, D) shared text embeddings for all horizons
+    """
+    if prediction_window < 1:
+        raise ValueError(f"prediction_window must be >= 1, got {prediction_window}")
+    if len(X) != len(y) or len(text) != len(y):
+        raise ValueError("X, y, and text must have the same number of rows.")
+
+    usable_rows = len(y) - prediction_window + 1
+    if usable_rows <= 0:
+        raise ValueError(
+            "prediction_window is too large for the dataset: "
+            f"len(y)={len(y)}, prediction_window={prediction_window}"
+        )
+
+    X_aligned = X[:usable_rows].astype(np.float32, copy=False)
+    text_aligned = text[:usable_rows].astype(np.float32, copy=False)
+    targets = [
+        y[horizon - 1 : horizon - 1 + usable_rows].astype(np.float32, copy=False)
+        for horizon in range(1, prediction_window + 1)
+    ]
+    Y_multi = np.stack(targets, axis=1)
+    return X_aligned, Y_multi, text_aligned
+
+
 # Backward-compatible alias for older scripts/notebooks.
 load_climate_dataset = load_tabular_text_dataset

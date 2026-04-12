@@ -15,7 +15,8 @@ def time_split(
     """
     Split sequentially into context / tune / eval based on ratios.
 
-    Ratios must sum to 1.0 and are applied in order.
+    Ratios must sum to 1.0 and are applied in order. `y` may be 1D
+    (single target) or 2D (multi-horizon targets with shape N x H).
     """
     ratio_sum = context_ratio + tune_ratio + eval_ratio
     if not np.isclose(ratio_sum, 1.0):

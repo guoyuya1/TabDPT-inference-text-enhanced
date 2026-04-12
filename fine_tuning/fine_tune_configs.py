@@ -37,6 +37,7 @@ class DataConfig:
     date_column: str | None
     numeric_features: list[str]
     target_column: str
+    prediction_window: int
     embedding_lags: list[int]
     embedding_columns: list[str] | None
     embedding_column_template: str | None
@@ -61,6 +62,7 @@ def load_dataset_config(config_path: str, dataset_name: str | None) -> dict:
 
 def load_fine_tune_config(config_path: str, dataset_name: str | None) -> DataConfig:
     dataset_cfg = dict(load_dataset_config(config_path, dataset_name))
+    dataset_cfg.setdefault("prediction_window", 1)
     dataset_cfg.setdefault("embedding_lags", [])
     dataset_cfg.setdefault("embedding_columns", None)
     dataset_cfg.setdefault("embedding_column_template", None)
