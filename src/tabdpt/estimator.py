@@ -41,6 +41,10 @@ _HF_REPO_ID = "Layer6/TabDPT"
 CPU_INF_BATCH = 16
 
 
+def _is_cuda_device(device: str | None) -> bool:
+    return isinstance(device, str) and device.startswith("cuda")
+
+
 class TabDPTEstimator(BaseEstimator):
     @staticmethod
     def download_weights() -> str:
@@ -99,8 +103,8 @@ class TabDPTEstimator(BaseEstimator):
         """
         self.mode = mode
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self.inf_batch_size = inf_batch_size if self.device == "cuda" else min(inf_batch_size, CPU_INF_BATCH)
-        self.use_flash = use_flash and self.device == "cuda"
+        self.inf_batch_size = inf_batch_size if _is_cuda_device(self.device) else min(inf_batch_size, CPU_INF_BATCH)
+        self.use_flash = use_flash and _is_cuda_device(self.device)
         self.missing_indicators = missing_indicators
         self.text_attn_layers = text_attn_layers
         self.text_enhanced = text_enhanced or text_attn_layers is not None
@@ -130,7 +134,7 @@ class TabDPTEstimator(BaseEstimator):
 
         self.max_features = self.model.num_features
         self.max_num_classes = self.model.n_out
-        self.compile = compile and self.device == "cuda"
+        self.compile = compile and _is_cuda_device(self.device)
         self.feature_reduction = feature_reduction
         self.faiss_metric = faiss_metric
         assert self.mode in ["cls", "reg"], "mode must be 'cls' or 'reg'"
