@@ -167,6 +167,25 @@ class _TeeWriter:
             stream.flush()
 
 
+def _delete_checkpoint_file(checkpoint_path: str | Path) -> None:
+    Path(checkpoint_path).unlink(missing_ok=True)
+
+
+def _delete_checkpoint_files(
+    checkpoint_paths: dict[int, str],
+    *,
+    keep_trial_indices: set[int],
+) -> int:
+    deleted = 0
+    for trial_index, checkpoint_path in list(checkpoint_paths.items()):
+        if trial_index in keep_trial_indices:
+            continue
+        _delete_checkpoint_file(checkpoint_path)
+        del checkpoint_paths[trial_index]
+        deleted += 1
+    return deleted
+
+
 def _clone_state_dict_to_cpu(state_dict: dict[str, Any]) -> dict[str, Any]:
     cloned: dict[str, Any] = {}
     for name, value in state_dict.items():
@@ -278,6 +297,51 @@ def _serialize_shared_baseline_result(shared_baseline: SharedBaselineResult) -> 
             else [_serialize_horizon_baseline_result(result) for result in shared_baseline.per_horizon]
         ),
     }
+
+
+def _format_summary_metrics_line(prefix: str, metrics: SummaryMetrics) -> str:
+    return (
+        f"{prefix} | mae={metrics.mae:.6f} | "
+        f"rmse={metrics.rmse:.6f} | "
+        f"mape={metrics.mape:.6f}%"
+    )
+
+
+def _format_per_horizon_baseline_lines(horizon_result: HorizonBaselineResult) -> list[str]:
+    prefix = f"baseline_horizon={horizon_result.horizon}"
+    lines = [
+        _format_summary_metrics_line(f"{prefix} | val_no_text", horizon_result.val_no_text),
+        _format_summary_metrics_line(f"{prefix} | val_with_text", horizon_result.val_with_text),
+        _format_summary_metrics_line(f"{prefix} | val_pca", horizon_result.val_pca),
+        _format_summary_metrics_line(f"{prefix} | test_no_text", horizon_result.test_no_text),
+        _format_summary_metrics_line(f"{prefix} | test_with_text", horizon_result.test_with_text),
+        _format_summary_metrics_line(f"{prefix} | test_pca", horizon_result.test_pca),
+    ]
+    lines.append(
+        (
+            f"{prefix} | val_truncate | unavailable"
+            if horizon_result.val_truncate is None
+            else (
+                f"{prefix} | val_truncate | label={horizon_result.val_truncate_label} | "
+                f"mae={horizon_result.val_truncate.mae:.6f} | "
+                f"rmse={horizon_result.val_truncate.rmse:.6f} | "
+                f"mape={horizon_result.val_truncate.mape:.6f}%"
+            )
+        )
+    )
+    lines.append(
+        (
+            f"{prefix} | test_truncate | unavailable"
+            if horizon_result.test_truncate is None
+            else (
+                f"{prefix} | test_truncate | label={horizon_result.test_truncate_label} | "
+                f"mae={horizon_result.test_truncate.mae:.6f} | "
+                f"rmse={horizon_result.test_truncate.rmse:.6f} | "
+                f"mape={horizon_result.test_truncate.mape:.6f}%"
+            )
+        )
+    )
+    return lines
 
 
 def _baseline_eval_inputs(
@@ -1161,16 +1225,10 @@ def _write_summary_log(
         "",
     ]
     if shared_baseline.per_horizon is not None:
+        lines.append("Shared Baseline By Horizon")
         for horizon_result in shared_baseline.per_horizon:
-            lines.append(
-                (
-                    f"baseline_horizon={horizon_result.horizon} | "
-                    f"val_with_text_mae={horizon_result.val_with_text.mae:.6f} | "
-                    f"val_with_text_rmse={horizon_result.val_with_text.rmse:.6f} | "
-                    f"test_with_text_mae={horizon_result.test_with_text.mae:.6f} | "
-                    f"test_with_text_rmse={horizon_result.test_with_text.rmse:.6f}"
-                )
-            )
+            lines.extend(_format_per_horizon_baseline_lines(horizon_result))
+        lines.append("")
     if best_trial.horizon_metrics is not None:
         for metrics in best_trial.horizon_metrics:
             lines.append(
@@ -1281,12 +1339,24 @@ def run_random_search(
     best_result = ranked_results[0]
     best_run_cfg = trial_cfgs[best_result.trial_index]
     top_limit = min(random_search_cfg.top_k, len(ranked_results))
+    top_trial_indices = {result.trial_index for result in ranked_results[:top_limit]}
+    deleted_non_top_k = _delete_checkpoint_files(
+        checkpoint_paths,
+        keep_trial_indices=top_trial_indices,
+    )
+    if deleted_non_top_k > 0:
+        print(
+            f"Deleted {deleted_non_top_k} temporary checkpoint(s) for non-top-ranked trials."
+        )
     print(f"\nEvaluating top {top_limit} ranked trial(s) on the test split...")
     ranked_results_with_test = list(ranked_results)
     ranked_index_by_trial = {result.trial_index: idx for idx, result in enumerate(ranked_results_with_test)}
     for rank, result in enumerate(ranked_results[:top_limit], start=1):
         trial_cfg = trial_cfgs[result.trial_index]
-        checkpoint_bundle = torch.load(checkpoint_paths[result.trial_index], map_location="cpu")
+        checkpoint_path = checkpoint_paths[result.trial_index]
+        checkpoint_bundle = torch.load(checkpoint_path, map_location="cpu")
+        _delete_checkpoint_file(checkpoint_path)
+        del checkpoint_paths[result.trial_index]
         if not isinstance(checkpoint_bundle, dict):
             raise RuntimeError(
                 f"Expected checkpoint bundle dict for trial {result.trial_index}, got {type(checkpoint_bundle)!r}."
@@ -1349,6 +1419,7 @@ def run_random_search(
             f"test_mae={test_metrics.mae:.6f} | test_rmse={test_metrics.rmse:.6f} | "
             f"test_mape={test_metrics.mape:.6f}%"
         )
+    print("Deleted all temporary HPO checkpoint bundles after test evaluation.")
     ranked_results = ranked_results_with_test
     best_result = ranked_results[0]
     print(
@@ -1414,7 +1485,6 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run random-search HPO over fine-tuning configs.")
     parser.add_argument("--config", required=True, help="Path to the random-search YAML config.")
     args = parser.parse_args()
-
     random_search_cfg = load_random_search_config(args.config)
     run_random_search(
         random_search_cfg,

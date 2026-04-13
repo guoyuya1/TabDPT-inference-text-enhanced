@@ -36,7 +36,7 @@ embedding_columns:
 - embedding_search_fact_summary_gpt_5_2_lag3
 embedding_column_template: null
 seed: 0
-prediction_window: 3
+prediction_window: 1
 max_rows: 1000
 context_ratio: 0.2
 train_ratio: 0.5
