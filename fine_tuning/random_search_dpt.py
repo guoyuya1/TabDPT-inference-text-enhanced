@@ -8,7 +8,6 @@ import csv
 import json
 import multiprocessing
 import random
-import re
 import sys
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
@@ -91,6 +90,21 @@ class RandomSearchTrialResult:
     test_mae: float | None = None
     test_rmse: float | None = None
     test_mape: float | None = None
+    horizon_metrics: list["HorizonTrialMetrics"] | None = None
+
+
+@dataclass(frozen=True)
+class HorizonTrialMetrics:
+    horizon: int
+    best_epoch: int | None
+    val_loss: float
+    val_mae: float
+    val_rmse: float
+    val_mape: float
+    test_loss: float | None = None
+    test_mae: float | None = None
+    test_rmse: float | None = None
+    test_mape: float | None = None
 
 
 @dataclass(frozen=True)
@@ -104,6 +118,22 @@ class SummaryMetrics:
 class SharedBaselineResult:
     text_attn_layers: list[int]
     max_context: int | None
+    val_no_text: SummaryMetrics
+    val_with_text: SummaryMetrics
+    val_pca: SummaryMetrics
+    val_truncate: SummaryMetrics | None
+    val_truncate_label: str | None
+    test_no_text: SummaryMetrics
+    test_with_text: SummaryMetrics
+    test_pca: SummaryMetrics
+    test_truncate: SummaryMetrics | None
+    test_truncate_label: str | None
+    per_horizon: list["HorizonBaselineResult"] | None = None
+
+
+@dataclass(frozen=True)
+class HorizonBaselineResult:
+    horizon: int
     val_no_text: SummaryMetrics
     val_with_text: SummaryMetrics
     val_pca: SummaryMetrics
@@ -147,16 +177,25 @@ def _clone_state_dict_to_cpu(state_dict: dict[str, Any]) -> dict[str, Any]:
     return cloned
 
 
-def _extract_best_epoch_from_trial_log(trial_log_path: Path) -> int | None:
-    log_text = trial_log_path.read_text(encoding="utf-8")
-    match = re.search(r"Restored best text-mixing params from epoch\s+(\d+)", log_text)
-    if match is None:
-        return None
-    return int(match.group(1))
-
-
 def _metrics_from_triplet(metrics: tuple[float, float, float]) -> SummaryMetrics:
     return SummaryMetrics(mae=metrics[0], rmse=metrics[1], mape=metrics[2])
+
+
+def _mean_summary_metrics(metrics_list: list[SummaryMetrics]) -> SummaryMetrics:
+    return SummaryMetrics(
+        mae=float(np.mean([metrics.mae for metrics in metrics_list])),
+        rmse=float(np.mean([metrics.rmse for metrics in metrics_list])),
+        mape=float(np.mean([metrics.mape for metrics in metrics_list])),
+    )
+
+
+def _mean_rolling_metrics(metrics_list: list[RollingMetrics]) -> RollingMetrics:
+    return RollingMetrics(
+        loss=float(np.mean([metrics.loss for metrics in metrics_list])),
+        mae=float(np.mean([metrics.mae for metrics in metrics_list])),
+        rmse=float(np.mean([metrics.rmse for metrics in metrics_list])),
+        mape=float(np.mean([metrics.mape for metrics in metrics_list])),
+    )
 
 
 def _serialize_summary_metrics(metrics: SummaryMetrics | None, *, label: str | None = None) -> dict[str, Any] | None:
@@ -170,6 +209,45 @@ def _serialize_summary_metrics(metrics: SummaryMetrics | None, *, label: str | N
     if label is not None:
         payload["label"] = label
     return payload
+
+
+def _serialize_horizon_trial_metrics(metrics: HorizonTrialMetrics) -> dict[str, Any]:
+    return {
+        "horizon": metrics.horizon,
+        "best_epoch": metrics.best_epoch,
+        "val_loss": metrics.val_loss,
+        "val_mae": metrics.val_mae,
+        "val_rmse": metrics.val_rmse,
+        "val_mape": metrics.val_mape,
+        "test_loss": metrics.test_loss,
+        "test_mae": metrics.test_mae,
+        "test_rmse": metrics.test_rmse,
+        "test_mape": metrics.test_mape,
+    }
+
+
+def _serialize_horizon_baseline_result(result: HorizonBaselineResult) -> dict[str, Any]:
+    return {
+        "horizon": result.horizon,
+        "val": {
+            "no_text": _serialize_summary_metrics(result.val_no_text),
+            "with_text": _serialize_summary_metrics(result.val_with_text),
+            "pca": _serialize_summary_metrics(result.val_pca),
+            "truncate": _serialize_summary_metrics(
+                result.val_truncate,
+                label=result.val_truncate_label,
+            ),
+        },
+        "test": {
+            "no_text": _serialize_summary_metrics(result.test_no_text),
+            "with_text": _serialize_summary_metrics(result.test_with_text),
+            "pca": _serialize_summary_metrics(result.test_pca),
+            "truncate": _serialize_summary_metrics(
+                result.test_truncate,
+                label=result.test_truncate_label,
+            ),
+        },
+    }
 
 
 def _serialize_shared_baseline_result(shared_baseline: SharedBaselineResult) -> dict[str, Any]:
@@ -194,6 +272,11 @@ def _serialize_shared_baseline_result(shared_baseline: SharedBaselineResult) -> 
                 label=shared_baseline.test_truncate_label,
             ),
         },
+        "per_horizon": (
+            None
+            if shared_baseline.per_horizon is None
+            else [_serialize_horizon_baseline_result(result) for result in shared_baseline.per_horizon]
+        ),
     }
 
 
@@ -242,12 +325,62 @@ def run_shared_baseline_evaluation(
             print(
                 "This baseline runs once from the base fine-tune config and is attached to the HPO summary."
             )
-            set_random_seeds(base_run_cfg.seed)
-            prepared_trial = prepare_fine_tune_trial(base_run_cfg, data_splits=data_splits)
+            per_horizon_results: list[HorizonBaselineResult] = []
+            for horizon in range(1, base_run_cfg.prediction_window + 1):
+                print(f"\n-- Shared baseline horizon {horizon}/{base_run_cfg.prediction_window} --")
+                set_random_seeds(base_run_cfg.seed)
+                prepared_trial = prepare_fine_tune_trial(
+                    base_run_cfg,
+                    data_splits=data_splits,
+                    horizon=horizon,
+                )
 
-            val_inputs = _baseline_eval_inputs(prepared_trial, split_name="val")
-            val_no_text = _metrics_from_triplet(
-                evaluate_rolling(
+                val_inputs = _baseline_eval_inputs(prepared_trial, split_name="val")
+                val_no_text = _metrics_from_triplet(
+                    evaluate_rolling(
+                        prepared_trial.reg,
+                        X_context_proc=val_inputs[0],
+                        y_context=val_inputs[1],
+                        text_context=val_inputs[2],
+                        X_eval_proc=val_inputs[3],
+                        y_eval=val_inputs[4],
+                        text_eval=val_inputs[5],
+                        use_text=False,
+                        label="Baseline val (no text attn)",
+                        max_context=base_run_cfg.tuning.max_context,
+                        horizon=horizon,
+                    )
+                )
+                val_with_text = _metrics_from_triplet(
+                    evaluate_rolling(
+                        prepared_trial.reg,
+                        X_context_proc=val_inputs[0],
+                        y_context=val_inputs[1],
+                        text_context=val_inputs[2],
+                        X_eval_proc=val_inputs[3],
+                        y_eval=val_inputs[4],
+                        text_eval=val_inputs[5],
+                        use_text=True,
+                        label="Baseline val (with text attn)",
+                        max_context=base_run_cfg.tuning.max_context,
+                        horizon=horizon,
+                    )
+                )
+                val_pca = _metrics_from_triplet(
+                    evaluate_rolling_pca(
+                        prepared_trial.reg,
+                        X_context_proc=val_inputs[0],
+                        y_context=val_inputs[1],
+                        text_context=val_inputs[2],
+                        X_eval_proc=val_inputs[3],
+                        y_eval=val_inputs[4],
+                        text_eval=val_inputs[5],
+                        label="Baseline val (PCA)",
+                        max_context=base_run_cfg.tuning.max_context,
+                        horizon=horizon,
+                    )
+                )
+                val_truncate_result = evaluate_rolling_truncate_text(
                     prepared_trial.reg,
                     X_context_proc=val_inputs[0],
                     y_context=val_inputs[1],
@@ -255,53 +388,57 @@ def run_shared_baseline_evaluation(
                     X_eval_proc=val_inputs[3],
                     y_eval=val_inputs[4],
                     text_eval=val_inputs[5],
-                    use_text=False,
-                    label="Baseline val (no text attn)",
+                    label="Baseline val (text truncate)",
                     max_context=base_run_cfg.tuning.max_context,
+                    horizon=horizon,
                 )
-            )
-            val_with_text = _metrics_from_triplet(
-                evaluate_rolling(
-                    prepared_trial.reg,
-                    X_context_proc=val_inputs[0],
-                    y_context=val_inputs[1],
-                    text_context=val_inputs[2],
-                    X_eval_proc=val_inputs[3],
-                    y_eval=val_inputs[4],
-                    text_eval=val_inputs[5],
-                    use_text=True,
-                    label="Baseline val (with text attn)",
-                    max_context=base_run_cfg.tuning.max_context,
-                )
-            )
-            val_pca = _metrics_from_triplet(
-                evaluate_rolling_pca(
-                    prepared_trial.reg,
-                    X_context_proc=val_inputs[0],
-                    y_context=val_inputs[1],
-                    text_context=val_inputs[2],
-                    X_eval_proc=val_inputs[3],
-                    y_eval=val_inputs[4],
-                    text_eval=val_inputs[5],
-                    label="Baseline val (PCA)",
-                    max_context=base_run_cfg.tuning.max_context,
-                )
-            )
-            val_truncate_result = evaluate_rolling_truncate_text(
-                prepared_trial.reg,
-                X_context_proc=val_inputs[0],
-                y_context=val_inputs[1],
-                text_context=val_inputs[2],
-                X_eval_proc=val_inputs[3],
-                y_eval=val_inputs[4],
-                text_eval=val_inputs[5],
-                label="Baseline val (text truncate)",
-                max_context=base_run_cfg.tuning.max_context,
-            )
 
-            test_inputs = _baseline_eval_inputs(prepared_trial, split_name="test")
-            test_no_text = _metrics_from_triplet(
-                evaluate_rolling(
+                test_inputs = _baseline_eval_inputs(prepared_trial, split_name="test")
+                test_no_text = _metrics_from_triplet(
+                    evaluate_rolling(
+                        prepared_trial.reg,
+                        X_context_proc=test_inputs[0],
+                        y_context=test_inputs[1],
+                        text_context=test_inputs[2],
+                        X_eval_proc=test_inputs[3],
+                        y_eval=test_inputs[4],
+                        text_eval=test_inputs[5],
+                        use_text=False,
+                        label="Baseline test (no text attn)",
+                        max_context=base_run_cfg.tuning.max_context,
+                        horizon=horizon,
+                    )
+                )
+                test_with_text = _metrics_from_triplet(
+                    evaluate_rolling(
+                        prepared_trial.reg,
+                        X_context_proc=test_inputs[0],
+                        y_context=test_inputs[1],
+                        text_context=test_inputs[2],
+                        X_eval_proc=test_inputs[3],
+                        y_eval=test_inputs[4],
+                        text_eval=test_inputs[5],
+                        use_text=True,
+                        label="Baseline test (with text attn)",
+                        max_context=base_run_cfg.tuning.max_context,
+                        horizon=horizon,
+                    )
+                )
+                test_pca = _metrics_from_triplet(
+                    evaluate_rolling_pca(
+                        prepared_trial.reg,
+                        X_context_proc=test_inputs[0],
+                        y_context=test_inputs[1],
+                        text_context=test_inputs[2],
+                        X_eval_proc=test_inputs[3],
+                        y_eval=test_inputs[4],
+                        text_eval=test_inputs[5],
+                        label="Baseline test (PCA)",
+                        max_context=base_run_cfg.tuning.max_context,
+                        horizon=horizon,
+                    )
+                )
+                test_truncate_result = evaluate_rolling_truncate_text(
                     prepared_trial.reg,
                     X_context_proc=test_inputs[0],
                     y_context=test_inputs[1],
@@ -309,75 +446,67 @@ def run_shared_baseline_evaluation(
                     X_eval_proc=test_inputs[3],
                     y_eval=test_inputs[4],
                     text_eval=test_inputs[5],
-                    use_text=False,
-                    label="Baseline test (no text attn)",
+                    label="Baseline test (text truncate)",
                     max_context=base_run_cfg.tuning.max_context,
+                    horizon=horizon,
                 )
-            )
-            test_with_text = _metrics_from_triplet(
-                evaluate_rolling(
-                    prepared_trial.reg,
-                    X_context_proc=test_inputs[0],
-                    y_context=test_inputs[1],
-                    text_context=test_inputs[2],
-                    X_eval_proc=test_inputs[3],
-                    y_eval=test_inputs[4],
-                    text_eval=test_inputs[5],
-                    use_text=True,
-                    label="Baseline test (with text attn)",
-                    max_context=base_run_cfg.tuning.max_context,
-                )
-            )
-            test_pca = _metrics_from_triplet(
-                evaluate_rolling_pca(
-                    prepared_trial.reg,
-                    X_context_proc=test_inputs[0],
-                    y_context=test_inputs[1],
-                    text_context=test_inputs[2],
-                    X_eval_proc=test_inputs[3],
-                    y_eval=test_inputs[4],
-                    text_eval=test_inputs[5],
-                    label="Baseline test (PCA)",
-                    max_context=base_run_cfg.tuning.max_context,
-                )
-            )
-            test_truncate_result = evaluate_rolling_truncate_text(
-                prepared_trial.reg,
-                X_context_proc=test_inputs[0],
-                y_context=test_inputs[1],
-                text_context=test_inputs[2],
-                X_eval_proc=test_inputs[3],
-                y_eval=test_inputs[4],
-                text_eval=test_inputs[5],
-                label="Baseline test (text truncate)",
-                max_context=base_run_cfg.tuning.max_context,
-            )
 
-    val_truncate = None
-    val_truncate_label = None
-    if val_truncate_result is not None:
-        val_truncate = _metrics_from_triplet(val_truncate_result[0])
-        val_truncate_label = val_truncate_result[1]
+                val_truncate = None
+                val_truncate_label = None
+                if val_truncate_result is not None:
+                    val_truncate = _metrics_from_triplet(val_truncate_result[0])
+                    val_truncate_label = val_truncate_result[1]
 
-    test_truncate = None
-    test_truncate_label = None
-    if test_truncate_result is not None:
-        test_truncate = _metrics_from_triplet(test_truncate_result[0])
-        test_truncate_label = test_truncate_result[1]
+                test_truncate = None
+                test_truncate_label = None
+                if test_truncate_result is not None:
+                    test_truncate = _metrics_from_triplet(test_truncate_result[0])
+                    test_truncate_label = test_truncate_result[1]
+
+                per_horizon_results.append(
+                    HorizonBaselineResult(
+                        horizon=horizon,
+                        val_no_text=val_no_text,
+                        val_with_text=val_with_text,
+                        val_pca=val_pca,
+                        val_truncate=val_truncate,
+                        val_truncate_label=val_truncate_label,
+                        test_no_text=test_no_text,
+                        test_with_text=test_with_text,
+                        test_pca=test_pca,
+                        test_truncate=test_truncate,
+                        test_truncate_label=test_truncate_label,
+                    )
+                )
 
     return SharedBaselineResult(
         text_attn_layers=list(base_run_cfg.model.text_attn_layers),
         max_context=base_run_cfg.tuning.max_context,
-        val_no_text=val_no_text,
-        val_with_text=val_with_text,
-        val_pca=val_pca,
-        val_truncate=val_truncate,
-        val_truncate_label=val_truncate_label,
-        test_no_text=test_no_text,
-        test_with_text=test_with_text,
-        test_pca=test_pca,
-        test_truncate=test_truncate,
-        test_truncate_label=test_truncate_label,
+        val_no_text=_mean_summary_metrics([result.val_no_text for result in per_horizon_results]),
+        val_with_text=_mean_summary_metrics([result.val_with_text for result in per_horizon_results]),
+        val_pca=_mean_summary_metrics([result.val_pca for result in per_horizon_results]),
+        val_truncate=(
+            None
+            if any(result.val_truncate is None for result in per_horizon_results)
+            else _mean_summary_metrics([result.val_truncate for result in per_horizon_results if result.val_truncate is not None])
+        ),
+        val_truncate_label=next(
+            (result.val_truncate_label for result in per_horizon_results if result.val_truncate_label is not None),
+            None,
+        ),
+        test_no_text=_mean_summary_metrics([result.test_no_text for result in per_horizon_results]),
+        test_with_text=_mean_summary_metrics([result.test_with_text for result in per_horizon_results]),
+        test_pca=_mean_summary_metrics([result.test_pca for result in per_horizon_results]),
+        test_truncate=(
+            None
+            if any(result.test_truncate is None for result in per_horizon_results)
+            else _mean_summary_metrics([result.test_truncate for result in per_horizon_results if result.test_truncate is not None])
+        ),
+        test_truncate_label=next(
+            (result.test_truncate_label for result in per_horizon_results if result.test_truncate_label is not None),
+            None,
+        ),
+        per_horizon=per_horizon_results,
     )
 
 
@@ -494,7 +623,7 @@ def execute_random_search_trial(
     *,
     trial_index: int,
     data_splits: FineTuneDataSplits,
-) -> tuple[RandomSearchTrialResult, PreparedFineTuneTrial]:
+) -> tuple[RandomSearchTrialResult, dict[int, dict[str, Any]]]:
     print(
         f"\n== Random Search Trial {trial_index:02d} ==\n"
         f"Config | text_attn_layers={trial_cfg.model.text_attn_layers} | "
@@ -502,19 +631,49 @@ def execute_random_search_trial(
         f"text_attn_lr={trial_cfg.tuning.text_attn_lr} | "
         f"gate_logit_clamp={trial_cfg.tuning.gate_logit_clamp} | "
         f"tune_batch_size={trial_cfg.tuning.tune_batch_size} | "
-        f"max_context={trial_cfg.tuning.max_context}"
+        f"max_context={trial_cfg.tuning.max_context} | "
+        f"prediction_window={trial_cfg.prediction_window}"
     )
     print("Per-trial baseline evaluations are skipped; shared HPO baseline is evaluated once separately.")
-    set_random_seeds(trial_cfg.seed)
-    prepared_trial = prepare_fine_tune_trial(trial_cfg, data_splits=data_splits)
-    fine_tune_prepared_trial(prepared_trial, tuning_cfg=trial_cfg.tuning)
-    val_metrics = evaluate_prepared_split(
-        prepared_trial,
-        split_name="val",
-        use_text=True,
-        tuning_cfg=trial_cfg.tuning,
-    )
-    ranking_score = objective_score(trial_cfg.tuning.early_stopping_metric, val_metrics)
+    horizon_metrics: list[HorizonTrialMetrics] = []
+    checkpoint_bundle: dict[int, dict[str, Any]] = {}
+    val_metrics_by_horizon: list[RollingMetrics] = []
+
+    for horizon in range(1, trial_cfg.prediction_window + 1):
+        print(f"\n-- Trial {trial_index:02d} horizon {horizon}/{trial_cfg.prediction_window} --")
+        set_random_seeds(trial_cfg.seed)
+        prepared_trial = prepare_fine_tune_trial(
+            trial_cfg,
+            data_splits=data_splits,
+            horizon=horizon,
+        )
+        fine_tune_outcome = fine_tune_prepared_trial(prepared_trial, tuning_cfg=trial_cfg.tuning)
+        val_metrics = evaluate_prepared_split(
+            prepared_trial,
+            split_name="val",
+            use_text=True,
+            tuning_cfg=trial_cfg.tuning,
+        )
+        val_metrics_by_horizon.append(val_metrics)
+        horizon_metrics.append(
+            HorizonTrialMetrics(
+                horizon=horizon,
+                best_epoch=fine_tune_outcome.best_epoch,
+                val_loss=val_metrics.loss,
+                val_mae=val_metrics.mae,
+                val_rmse=val_metrics.rmse,
+                val_mape=val_metrics.mape,
+            )
+        )
+        checkpoint_bundle[horizon] = _clone_state_dict_to_cpu(prepared_trial.reg.model.state_dict())
+        print(
+            f"Horizon {horizon:02d} complete | best_epoch={fine_tune_outcome.best_epoch} | "
+            f"val_mae={val_metrics.mae:.6f} | val_rmse={val_metrics.rmse:.6f} | "
+            f"val_mape={val_metrics.mape:.6f}%"
+        )
+
+    aggregate_val_metrics = _mean_rolling_metrics(val_metrics_by_horizon)
+    ranking_score = objective_score(trial_cfg.tuning.early_stopping_metric, aggregate_val_metrics)
     result = RandomSearchTrialResult(
         trial_index=trial_index,
         text_attn_layers=list(trial_cfg.model.text_attn_layers),
@@ -524,18 +683,24 @@ def execute_random_search_trial(
         gate_logit_clamp=trial_cfg.tuning.gate_logit_clamp,
         tune_batch_size=trial_cfg.tuning.tune_batch_size,
         max_context=trial_cfg.tuning.max_context,
-        val_loss=val_metrics.loss,
-        val_mae=val_metrics.mae,
-        val_rmse=val_metrics.rmse,
-        val_mape=val_metrics.mape,
+        val_loss=aggregate_val_metrics.loss,
+        val_mae=aggregate_val_metrics.mae,
+        val_rmse=aggregate_val_metrics.rmse,
+        val_mape=aggregate_val_metrics.mape,
         ranking_score=ranking_score,
+        best_epoch=(
+            horizon_metrics[0].best_epoch
+            if trial_cfg.prediction_window == 1
+            else None
+        ),
+        horizon_metrics=horizon_metrics,
     )
     print(
         f"Trial {trial_index:02d} complete | objective={ranking_score:.6f} | "
-        f"val_mae={val_metrics.mae:.6f} | val_rmse={val_metrics.rmse:.6f} | "
-        f"val_mape={val_metrics.mape:.6f}%"
+        f"val_mae={aggregate_val_metrics.mae:.6f} | val_rmse={aggregate_val_metrics.rmse:.6f} | "
+        f"val_mape={aggregate_val_metrics.mape:.6f}%"
     )
-    return result, prepared_trial
+    return result, checkpoint_bundle
 
 
 def _extract_gpu_id_from_device(device: str | None) -> int | None:
@@ -621,14 +786,13 @@ def _execute_trial_with_logging(
         with contextlib.redirect_stdout(tee_writer), contextlib.redirect_stderr(tee_writer):
             if assigned_device is not None:
                 print(f"Assigned device | {assigned_device}")
-            result, prepared_trial = execute_random_search_trial(
+            result, checkpoint_bundle = execute_random_search_trial(
                 resolved_trial_cfg,
                 trial_index=trial_index,
                 data_splits=data_splits,
             )
 
-    result = replace(result, best_epoch=_extract_best_epoch_from_trial_log(trial_log_path))
-    torch.save(_clone_state_dict_to_cpu(prepared_trial.reg.model.state_dict()), checkpoint_path)
+    torch.save(checkpoint_bundle, checkpoint_path)
     return TrialExecutionArtifacts(
         result=result,
         checkpoint_path=str(checkpoint_path),
@@ -822,6 +986,7 @@ def _append_test_metrics_to_trial_log(
     trial_index: int,
     rank: int,
     metrics: RollingMetrics,
+    horizon_metrics: list[HorizonTrialMetrics] | None = None,
 ) -> None:
     trial_log_path = logs_dir / f"trial_{trial_index:03d}.log"
     with trial_log_path.open("a", encoding="utf-8") as f:
@@ -831,6 +996,15 @@ def _append_test_metrics_to_trial_log(
             f"test_loss={metrics.loss:.6f} | test_mae={metrics.mae:.6f} | "
             f"test_rmse={metrics.rmse:.6f} | test_mape={metrics.mape:.6f}%\n"
         )
+        if horizon_metrics is not None:
+            for horizon_metric in horizon_metrics:
+                f.write(
+                    f"horizon={horizon_metric.horizon} | best_epoch={horizon_metric.best_epoch} | "
+                    f"test_loss={horizon_metric.test_loss:.6f} | "
+                    f"test_mae={horizon_metric.test_mae:.6f} | "
+                    f"test_rmse={horizon_metric.test_rmse:.6f} | "
+                    f"test_mape={horizon_metric.test_mape:.6f}%\n"
+                )
 
 
 def _write_summary_json(
@@ -858,9 +1032,23 @@ def _write_summary_json(
         "total_combinations": total_combinations,
         "top_k": top_limit,
         "top_k_test_evaluated": top_limit,
-        "best_trial": _serialize_trial_result(best_trial, rank=1),
+        "best_trial": {
+            **_serialize_trial_result(best_trial, rank=1),
+            "horizon_metrics": (
+                None
+                if best_trial.horizon_metrics is None
+                else [_serialize_horizon_trial_metrics(metrics) for metrics in best_trial.horizon_metrics]
+            ),
+        },
         "top_trials": [
-            _serialize_trial_result(result, rank=rank)
+            {
+                **_serialize_trial_result(result, rank=rank),
+                "horizon_metrics": (
+                    None
+                    if result.horizon_metrics is None
+                    else [_serialize_horizon_trial_metrics(metrics) for metrics in result.horizon_metrics]
+                ),
+            }
             for rank, result in enumerate(ranked_results[:top_limit], start=1)
         ],
     }
@@ -898,6 +1086,7 @@ def _write_summary_log(
             f"params | text_attn_layers={shared_baseline.text_attn_layers} | "
             f"max_context={shared_baseline.max_context}"
         ),
+        f"prediction_window={len(shared_baseline.per_horizon) if shared_baseline.per_horizon is not None else 1}",
         (
             f"val_no_text | mae={shared_baseline.val_no_text.mae:.6f} | "
             f"rmse={shared_baseline.val_no_text.rmse:.6f} | "
@@ -970,8 +1159,28 @@ def _write_summary_log(
             f"max_context={best_trial.max_context}"
         ),
         "",
-        f"Top {top_limit} Trials",
     ]
+    if shared_baseline.per_horizon is not None:
+        for horizon_result in shared_baseline.per_horizon:
+            lines.append(
+                (
+                    f"baseline_horizon={horizon_result.horizon} | "
+                    f"val_with_text_mae={horizon_result.val_with_text.mae:.6f} | "
+                    f"val_with_text_rmse={horizon_result.val_with_text.rmse:.6f} | "
+                    f"test_with_text_mae={horizon_result.test_with_text.mae:.6f} | "
+                    f"test_with_text_rmse={horizon_result.test_with_text.rmse:.6f}"
+                )
+            )
+    if best_trial.horizon_metrics is not None:
+        for metrics in best_trial.horizon_metrics:
+            lines.append(
+                (
+                    f"best_trial_horizon={metrics.horizon} | best_epoch={metrics.best_epoch} | "
+                    f"val_mae={metrics.val_mae:.6f} | val_rmse={metrics.val_rmse:.6f} | "
+                    f"test_mae={metrics.test_mae:.6f} | test_rmse={metrics.test_rmse:.6f}"
+                )
+            )
+    lines.append(f"Top {top_limit} Trials")
     for rank, result in enumerate(ranked_results[:top_limit], start=1):
         lines.append(
             (
@@ -986,6 +1195,16 @@ def _write_summary_log(
                 f"tune_batch_size={result.tune_batch_size} | max_context={result.max_context}"
             )
         )
+        if result.horizon_metrics is not None:
+            for metrics in result.horizon_metrics:
+                lines.append(
+                    (
+                        f"trial_index={result.trial_index} horizon={metrics.horizon} | "
+                        f"best_epoch={metrics.best_epoch} | val_mae={metrics.val_mae:.6f} | "
+                        f"val_rmse={metrics.val_rmse:.6f} | "
+                        f"test_mae={metrics.test_mae:.6f} | test_rmse={metrics.test_rmse:.6f}"
+                    )
+                )
 
     with (output_dir / "summary.log").open("w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
@@ -1008,7 +1227,8 @@ def run_random_search(
         "Random search setup | "
         f"base_config={random_search_cfg.base_config} | "
         f"dataset={random_search_cfg.base_dataset} | "
-        f"objective={base_run_cfg.tuning.early_stopping_metric}"
+        f"objective={base_run_cfg.tuning.early_stopping_metric} | "
+        f"prediction_window={base_run_cfg.prediction_window}"
     )
     print(
         "Split sizes: "
@@ -1066,26 +1286,63 @@ def run_random_search(
     ranked_index_by_trial = {result.trial_index: idx for idx, result in enumerate(ranked_results_with_test)}
     for rank, result in enumerate(ranked_results[:top_limit], start=1):
         trial_cfg = trial_cfgs[result.trial_index]
-        prepared_trial = prepare_fine_tune_trial(trial_cfg, data_splits=data_splits)
-        prepared_trial.reg.model.load_state_dict(torch.load(checkpoint_paths[result.trial_index], map_location="cpu"))
-        test_metrics = evaluate_prepared_split(
-            prepared_trial,
-            split_name="test",
-            use_text=True,
-            tuning_cfg=trial_cfg.tuning,
-        )
+        checkpoint_bundle = torch.load(checkpoint_paths[result.trial_index], map_location="cpu")
+        if not isinstance(checkpoint_bundle, dict):
+            raise RuntimeError(
+                f"Expected checkpoint bundle dict for trial {result.trial_index}, got {type(checkpoint_bundle)!r}."
+            )
+
+        horizon_test_metrics: list[RollingMetrics] = []
+        updated_horizon_metrics: list[HorizonTrialMetrics] = []
+        horizon_metrics_source = result.horizon_metrics or [
+            HorizonTrialMetrics(
+                horizon=1,
+                best_epoch=result.best_epoch,
+                val_loss=result.val_loss,
+                val_mae=result.val_mae,
+                val_rmse=result.val_rmse,
+                val_mape=result.val_mape,
+            )
+        ]
+        for horizon_metric in horizon_metrics_source:
+            prepared_trial = prepare_fine_tune_trial(
+                trial_cfg,
+                data_splits=data_splits,
+                horizon=horizon_metric.horizon,
+            )
+            prepared_trial.reg.model.load_state_dict(checkpoint_bundle[horizon_metric.horizon])
+            test_metrics = evaluate_prepared_split(
+                prepared_trial,
+                split_name="test",
+                use_text=True,
+                tuning_cfg=trial_cfg.tuning,
+            )
+            horizon_test_metrics.append(test_metrics)
+            updated_horizon_metrics.append(
+                replace(
+                    horizon_metric,
+                    test_loss=test_metrics.loss,
+                    test_mae=test_metrics.mae,
+                    test_rmse=test_metrics.rmse,
+                    test_mape=test_metrics.mape,
+                )
+            )
+
+        test_metrics = _mean_rolling_metrics(horizon_test_metrics)
         ranked_results_with_test[ranked_index_by_trial[result.trial_index]] = replace(
             result,
             test_loss=test_metrics.loss,
             test_mae=test_metrics.mae,
             test_rmse=test_metrics.rmse,
             test_mape=test_metrics.mape,
+            horizon_metrics=updated_horizon_metrics,
         )
         _append_test_metrics_to_trial_log(
             logs_dir,
             trial_index=result.trial_index,
             rank=rank,
             metrics=test_metrics,
+            horizon_metrics=updated_horizon_metrics,
         )
         print(
             f"Test rank {rank} | trial_index={result.trial_index} | "
@@ -1111,6 +1368,12 @@ def run_random_search(
             f"val_mae={result.val_mae:.6f} | test_mae={result.test_mae:.6f} | "
             f"text_attn_layers={result.text_attn_layers}"
         )
+        if result.horizon_metrics is not None:
+            for metrics in result.horizon_metrics:
+                print(
+                    f"   horizon={metrics.horizon} | best_epoch={metrics.best_epoch} | "
+                    f"val_mae={metrics.val_mae:.6f} | test_mae={metrics.test_mae:.6f}"
+                )
 
     _write_trial_results_csv(output_dir, ranked_results)
     _write_best_fine_tune_config(output_dir, best_run_cfg=best_run_cfg)

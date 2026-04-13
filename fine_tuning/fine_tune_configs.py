@@ -53,6 +53,15 @@ class DataConfig:
     seed: int
     model: ModelConfig
     tuning: TuningConfig
+    prediction_window: int = 1
+
+
+def _validate_positive_int(name: str, value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{name} must be a positive integer.")
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer.")
+    return value
 
 
 def _validate_text_attn_layers(text_attn_layers: object) -> list[int]:
@@ -87,6 +96,7 @@ def load_dataset_config(config_path: str, dataset_name: str | None) -> dict:
 
 def load_fine_tune_config(config_path: str, dataset_name: str | None) -> DataConfig:
     dataset_cfg = dict(load_dataset_config(config_path, dataset_name))
+    dataset_cfg.setdefault("prediction_window", 1)
     dataset_cfg.setdefault("embedding_lags", [])
     dataset_cfg.setdefault("embedding_columns", None)
     dataset_cfg.setdefault("embedding_column_template", None)
@@ -152,4 +162,8 @@ def load_fine_tune_config(config_path: str, dataset_name: str | None) -> DataCon
         for key in DataConfig.__dataclass_fields__
         if key in dataset_cfg
     }
+    dataset_cfg["prediction_window"] = _validate_positive_int(
+        "prediction_window",
+        dataset_cfg["prediction_window"],
+    )
     return DataConfig(**dataset_cfg)

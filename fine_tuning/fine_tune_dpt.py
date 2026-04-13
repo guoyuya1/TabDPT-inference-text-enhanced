@@ -32,23 +32,25 @@ from tabdpt.utils import pad_x
 
 try:
     from .eval_fine_tune import (
+        _build_rolling_train_step,
         _format_metrics,
         evaluate_rolling,
         evaluate_rolling_pca,
         evaluate_rolling_truncate_text,
     )
     from .fine_tune_configs import DataConfig, TuningConfig, load_fine_tune_config
-    from .load_dataset import load_tabular_text_dataset
+    from .load_dataset import build_direct_multi_horizon_dataset, load_tabular_text_dataset
     from .split_ts import time_split
 except ImportError:
     from eval_fine_tune import (
+        _build_rolling_train_step,
         _format_metrics,
         evaluate_rolling,
         evaluate_rolling_pca,
         evaluate_rolling_truncate_text,
     )
     from fine_tune_configs import DataConfig, TuningConfig, load_fine_tune_config
-    from load_dataset import load_tabular_text_dataset
+    from load_dataset import build_direct_multi_horizon_dataset, load_tabular_text_dataset
     from split_ts import time_split
 
 
@@ -86,6 +88,7 @@ class PreparedFineTuneTrial:
     X_train_proc: np.ndarray
     X_val_proc: np.ndarray
     X_test_proc: np.ndarray
+    prediction_horizon: int
 
 
 @dataclass(frozen=True)
@@ -94,6 +97,21 @@ class RollingMetrics:
     mae: float
     rmse: float
     mape: float
+
+
+@dataclass(frozen=True)
+class FineTuneOutcome:
+    top_validation_mae_checkpoints: list[ValidationMaeCheckpoint]
+    best_epoch: int
+    best_score: float
+
+
+@dataclass(frozen=True)
+class HorizonRunResult:
+    horizon: int
+    best_epoch: int
+    tuned_no_text_test: tuple[float, float, float]
+    tuned_text_test: tuple[float, float, float]
 
 
 def _clone_state_dict_to_cpu(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
@@ -200,6 +218,10 @@ def load_fine_tune_arrays(run_cfg: DataConfig) -> tuple[np.ndarray, np.ndarray, 
     return X, y, text
 
 
+def prediction_horizons(run_cfg: DataConfig) -> range:
+    return range(1, run_cfg.prediction_window + 1)
+
+
 def split_fine_tune_data(
     run_cfg: DataConfig,
     *,
@@ -222,16 +244,63 @@ def split_fine_tune_data(
 
 def load_and_split_fine_tune_data(run_cfg: DataConfig) -> FineTuneDataSplits:
     X, y, text = load_fine_tune_arrays(run_cfg)
+    if run_cfg.prediction_window > 1:
+        X, y, text = build_direct_multi_horizon_dataset(
+            X,
+            y,
+            text,
+            prediction_window=run_cfg.prediction_window,
+        )
     return split_fine_tune_data(run_cfg, X=X, y=y, text=text)
+
+
+def select_fine_tune_splits_for_horizon(
+    data_splits: FineTuneDataSplits,
+    *,
+    horizon: int,
+) -> FineTuneDataSplits:
+    if horizon <= 0:
+        raise ValueError("horizon must be positive.")
+
+    if data_splits.y_context.ndim == 1:
+        if horizon != 1:
+            raise ValueError(
+                f"Requested horizon {horizon}, but the loaded splits are single-horizon."
+            )
+        return data_splits
+
+    prediction_window = int(data_splits.y_context.shape[1])
+    if horizon > prediction_window:
+        raise ValueError(
+            f"Requested horizon {horizon}, but only {prediction_window} horizon(s) are available."
+        )
+
+    horizon_idx = horizon - 1
+    return FineTuneDataSplits(
+        X_context=data_splits.X_context,
+        y_context=data_splits.y_context[:, horizon_idx].astype(np.float32, copy=False),
+        text_context=data_splits.text_context,
+        X_train=data_splits.X_train,
+        y_train=data_splits.y_train[:, horizon_idx].astype(np.float32, copy=False),
+        text_train=data_splits.text_train,
+        X_val=data_splits.X_val,
+        y_val=data_splits.y_val[:, horizon_idx].astype(np.float32, copy=False),
+        text_val=data_splits.text_val,
+        X_test=data_splits.X_test,
+        y_test=data_splits.y_test[:, horizon_idx].astype(np.float32, copy=False),
+        text_test=data_splits.text_test,
+    )
 
 
 def prepare_fine_tune_trial(
     run_cfg: DataConfig,
     *,
     data_splits: FineTuneDataSplits | None = None,
+    horizon: int = 1,
 ) -> PreparedFineTuneTrial:
     if data_splits is None:
         data_splits = load_and_split_fine_tune_data(run_cfg)
+    selected_splits = select_fine_tune_splits_for_horizon(data_splits, horizon=horizon)
 
     reg = load_tabdpt_regressor(
         device=run_cfg.model.device,
@@ -240,37 +309,38 @@ def prepare_fine_tune_trial(
         use_flash=run_cfg.model.use_flash,
         compile_model=run_cfg.model.compile_model,
     )
-    reg.fit(data_splits.X_context, data_splits.y_context, data_splits.text_context)
+    reg.fit(selected_splits.X_context, selected_splits.y_context, selected_splits.text_context)
 
     reduction_mode = None
     reduction_payload = None
     return PreparedFineTuneTrial(
         reg=reg,
-        splits=data_splits,
+        splits=selected_splits,
         X_context_proc=preprocess_features(
             reg,
-            data_splits.X_context,
+            selected_splits.X_context,
             reduction_mode=reduction_mode,
             reduction_payload=reduction_payload,
         ),
         X_train_proc=preprocess_features(
             reg,
-            data_splits.X_train,
+            selected_splits.X_train,
             reduction_mode=reduction_mode,
             reduction_payload=reduction_payload,
         ),
         X_val_proc=preprocess_features(
             reg,
-            data_splits.X_val,
+            selected_splits.X_val,
             reduction_mode=reduction_mode,
             reduction_payload=reduction_payload,
         ),
         X_test_proc=preprocess_features(
             reg,
-            data_splits.X_test,
+            selected_splits.X_test,
             reduction_mode=reduction_mode,
             reduction_payload=reduction_payload,
         ),
+        prediction_horizon=horizon,
     )
 
 
@@ -644,6 +714,7 @@ def _evaluate_rolling_loss_and_mae(
     use_text: bool,
     max_context: int | None,
     loss_type: str,
+    horizon: int = 1,
 ) -> tuple[float, float, float, float]:
     """Run rolling evaluation and return average normalized loss plus metrics."""
     if use_text and (text_context is None or text_eval is None):
@@ -654,22 +725,17 @@ def _evaluate_rolling_loss_and_mae(
     loss_sum = 0.0
     with torch.no_grad():
         for idx in range(len(y_eval)):
-            X_train_full = np.concatenate((X_context_proc, X_eval_proc[:idx]))
-            y_train_full = np.concatenate((y_context, y_eval[:idx]))
-            if use_text:
-                text_train_full = np.concatenate((text_context, text_eval[:idx]), axis=0)
-
-            if max_context is not None:
-                X_train_step = X_train_full[-max_context:]
-                y_train_step = y_train_full[-max_context:]
-                if use_text:
-                    text_train_step = text_train_full[-max_context:]
-            else:
-                X_train_step = X_train_full
-                y_train_step = y_train_full
-                if use_text:
-                    text_train_step = text_train_full
-
+            X_train_step, y_train_step, text_train_step = _build_rolling_train_step(
+                X_context_proc=X_context_proc,
+                y_context=y_context,
+                text_context=text_context if use_text else None,
+                X_eval_proc=X_eval_proc,
+                y_eval=y_eval,
+                text_eval=text_eval if use_text else None,
+                idx=idx,
+                horizon=horizon,
+                max_context=max_context,
+            )
             X_test_step = X_eval_proc[idx:idx + 1]
             if use_text:
                 train_text_batch = text_train_step[None, ...]
@@ -742,6 +808,7 @@ def evaluate_prepared_split(
         use_text=use_text,
         max_context=tuning_cfg.max_context,
         loss_type=tuning_cfg.loss_type,
+        horizon=prepared_trial.prediction_horizon,
     )
     return RollingMetrics(loss=loss, mae=mae, rmse=rmse, mape=mape)
 
@@ -765,7 +832,7 @@ def fine_tune_prepared_trial(
     prepared_trial: PreparedFineTuneTrial,
     *,
     tuning_cfg: TuningConfig,
-) -> list[ValidationMaeCheckpoint]:
+) -> FineTuneOutcome:
     splits = prepared_trial.splits
     return fine_tune_external_gate(
         prepared_trial.reg,
@@ -779,6 +846,7 @@ def fine_tune_prepared_trial(
         X_val_proc=prepared_trial.X_val_proc,
         y_val=splits.y_val,
         text_val=splits.text_val,
+        prediction_horizon=prepared_trial.prediction_horizon,
     )
 
 
@@ -795,7 +863,8 @@ def fine_tune_external_gate(
     X_val_proc: np.ndarray,
     y_val: np.ndarray,
     text_val: np.ndarray,
-) -> list[ValidationMaeCheckpoint]:
+    prediction_horizon: int = 1,
+) -> FineTuneOutcome:
     """
     Fine-tune only the text-enhanced blocks' text-mixing parameters.
 
@@ -852,21 +921,17 @@ def fine_tune_external_gate(
             current_batch_size = end - start
 
             for point_idx in range(start, end):
-                X_point_context = np.concatenate((X_context_proc, X_train_proc[:point_idx]))
-                y_point_context = np.concatenate((y_context, y_train[:point_idx]))
-                text_point_context = np.concatenate((text_context, text_train[:point_idx]), axis=0)
-                # When max_context is set, each training step only sees the most recent
-                # rows from the accumulated context so training matches a fixed rolling window.
-                if tuning_cfg.max_context is not None:
-                    X_context_step = X_point_context[-tuning_cfg.max_context:]
-                    y_context_step = y_point_context[-tuning_cfg.max_context:]
-                    text_context_step = text_point_context[-tuning_cfg.max_context:]
-                # Otherwise, each step uses the full available history: the original context
-                # plus every earlier train row before the current prediction target.
-                else:
-                    X_context_step = X_point_context
-                    y_context_step = y_point_context
-                    text_context_step = text_point_context
+                X_context_step, y_context_step, text_context_step = _build_rolling_train_step(
+                    X_context_proc=X_context_proc,
+                    y_context=y_context,
+                    text_context=text_context,
+                    X_eval_proc=X_train_proc,
+                    y_eval=y_train,
+                    text_eval=text_train,
+                    idx=point_idx,
+                    horizon=prediction_horizon,
+                    max_context=tuning_cfg.max_context,
+                )
 
                 train_text_batch = text_context_step[None, ...]
                 test_text_batch = text_train[point_idx:point_idx + 1][None, ...]
@@ -926,6 +991,7 @@ def fine_tune_external_gate(
             use_text=True,
             max_context=tuning_cfg.max_context,
             loss_type=tuning_cfg.loss_type,
+            horizon=prediction_horizon,
         )
         val_loss, val_mae, val_rmse, val_mape = _evaluate_rolling_loss_and_mae(
             reg,
@@ -938,6 +1004,7 @@ def fine_tune_external_gate(
             use_text=True,
             max_context=tuning_cfg.max_context,
             loss_type=tuning_cfg.loss_type,
+            horizon=prediction_horizon,
         )
         param_stats = get_trainining_info(reg)
         _print_epoch_section(
@@ -998,8 +1065,263 @@ def fine_tune_external_gate(
     for p in reg.model.parameters():
         p.requires_grad_(False)
 
-    return top_validation_mae_checkpoints
+    return FineTuneOutcome(
+        top_validation_mae_checkpoints=top_validation_mae_checkpoints,
+        best_epoch=best_epoch,
+        best_score=best_score,
+    )
+def _mean_metric_triplets(metric_triplets: list[tuple[float, float, float]]) -> tuple[float, float, float]:
+    return tuple(
+        float(np.mean([triplet[idx] for triplet in metric_triplets]))
+        for idx in range(3)
+    )
 
+
+def _run_single_horizon(
+    run_cfg: DataConfig,
+    *,
+    data_splits: FineTuneDataSplits,
+    horizon: int,
+) -> HorizonRunResult:
+    print(f"\n{'=' * 16} Horizon {horizon}/{run_cfg.prediction_window} {'=' * 16}")
+    prepared_trial = prepare_fine_tune_trial(run_cfg, data_splits=data_splits, horizon=horizon)
+    reg = prepared_trial.reg
+    splits = prepared_trial.splits
+    X_context_proc = prepared_trial.X_context_proc
+    X_train_proc = prepared_trial.X_train_proc
+    X_val_proc = prepared_trial.X_val_proc
+    X_test_proc = prepared_trial.X_test_proc
+    y_context = splits.y_context
+    text_context = splits.text_context
+    y_train = splits.y_train
+    text_train = splits.text_train
+    y_val = splits.y_val
+    text_val = splits.text_val
+    y_test = splits.y_test
+    text_test = splits.text_test
+
+    print("\n== Baseline (before tuning) ==")
+    baseline_no_text_train = evaluate_rolling(
+        reg,
+        X_context_proc=X_context_proc,
+        y_context=y_context,
+        text_context=text_context,
+        X_eval_proc=X_train_proc,
+        y_eval=y_train,
+        text_eval=text_train,
+        use_text=False,
+        label="Train (no text attn)",
+        max_context=run_cfg.tuning.max_context,
+        horizon=horizon,
+    )
+    baseline_pca_train = evaluate_rolling_pca(
+        reg,
+        X_context_proc=X_context_proc,
+        y_context=y_context,
+        text_context=text_context,
+        X_eval_proc=X_train_proc,
+        y_eval=y_train,
+        text_eval=text_train,
+        label="Train (PCA)",
+        max_context=run_cfg.tuning.max_context,
+        horizon=horizon,
+    )
+    baseline_truncate_train = evaluate_rolling_truncate_text(
+        reg,
+        X_context_proc=X_context_proc,
+        y_context=y_context,
+        text_context=text_context,
+        X_eval_proc=X_train_proc,
+        y_eval=y_train,
+        text_eval=text_train,
+        label="Train (text truncate)",
+        max_context=run_cfg.tuning.max_context,
+        horizon=horizon,
+    )
+    val_context_proc = np.concatenate((X_context_proc, X_train_proc))
+    val_y_context = np.concatenate((y_context, y_train))
+    val_text_context = np.concatenate((text_context, text_train), axis=0)
+    baseline_no_text_val = evaluate_rolling(
+        reg,
+        X_context_proc=val_context_proc,
+        y_context=val_y_context,
+        text_context=val_text_context,
+        X_eval_proc=X_val_proc,
+        y_eval=y_val,
+        text_eval=text_val,
+        use_text=False,
+        label="Val (no text attn)",
+        max_context=run_cfg.tuning.max_context,
+        horizon=horizon,
+    )
+    baseline_text_val = evaluate_rolling(
+        reg,
+        X_context_proc=val_context_proc,
+        y_context=val_y_context,
+        text_context=val_text_context,
+        X_eval_proc=X_val_proc,
+        y_eval=y_val,
+        text_eval=text_val,
+        use_text=True,
+        label="Val (with text attn)",
+        max_context=run_cfg.tuning.max_context,
+        horizon=horizon,
+    )
+    baseline_pca_val = evaluate_rolling_pca(
+        reg,
+        X_context_proc=val_context_proc,
+        y_context=val_y_context,
+        text_context=val_text_context,
+        X_eval_proc=X_val_proc,
+        y_eval=y_val,
+        text_eval=text_val,
+        label="Val (PCA)",
+        max_context=run_cfg.tuning.max_context,
+        horizon=horizon,
+    )
+    baseline_truncate_val = evaluate_rolling_truncate_text(
+        reg,
+        X_context_proc=val_context_proc,
+        y_context=val_y_context,
+        text_context=val_text_context,
+        X_eval_proc=X_val_proc,
+        y_eval=y_val,
+        text_eval=text_val,
+        label="Val (text truncate)",
+        max_context=run_cfg.tuning.max_context,
+        horizon=horizon,
+    )
+    if run_cfg.tuning.debug_text_effect:
+        delta_mae = baseline_text_val[0] - baseline_no_text_val[0]
+        delta_rmse = baseline_text_val[1] - baseline_no_text_val[1]
+        delta_mape = baseline_text_val[2] - baseline_no_text_val[2]
+        print(
+            f"Val text effect | ΔMAE={delta_mae:.6f} | "
+            f"ΔRMSE={delta_rmse:.6f} | ΔMAPE={delta_mape:.6f}%"
+        )
+        print("Initial text-mixing params:", get_trainining_info(reg))
+    else:
+        print("Initial text-mixing gates:", text_mixing_gate_stats(reg))
+
+    print("\n== Fine-tuning text-mixing parameters ==")
+    fine_tune_outcome = fine_tune_prepared_trial(
+        prepared_trial,
+        tuning_cfg=run_cfg.tuning,
+    )
+
+    print("\n== After tuning ==")
+    _format_metrics("Train (no text attn)", *baseline_no_text_train)
+    _format_metrics("Train (PCA)", *baseline_pca_train)
+    if baseline_truncate_train is not None:
+        _format_metrics(baseline_truncate_train[1], *baseline_truncate_train[0])
+    evaluate_rolling(
+        reg,
+        X_context_proc=X_context_proc,
+        y_context=y_context,
+        text_context=text_context,
+        X_eval_proc=X_train_proc,
+        y_eval=y_train,
+        text_eval=text_train,
+        use_text=True,
+        label="Train (with text attn)",
+        max_context=run_cfg.tuning.max_context,
+        horizon=horizon,
+    )
+
+    test_context_proc = np.concatenate((X_context_proc, X_train_proc, X_val_proc))
+    test_y_context = np.concatenate((y_context, y_train, y_val))
+    test_text_context = np.concatenate((text_context, text_train, text_val), axis=0)
+    tuned_no_text_test = evaluate_rolling(
+        reg,
+        X_context_proc=test_context_proc,
+        y_context=test_y_context,
+        text_context=test_text_context,
+        X_eval_proc=X_test_proc,
+        y_eval=y_test,
+        text_eval=text_test,
+        use_text=False,
+        label="Test (no text attn)",
+        max_context=run_cfg.tuning.max_context,
+        horizon=horizon,
+    )
+    evaluate_rolling_pca(
+        reg,
+        X_context_proc=test_context_proc,
+        y_context=test_y_context,
+        text_context=test_text_context,
+        X_eval_proc=X_test_proc,
+        y_eval=y_test,
+        text_eval=text_test,
+        label="Test (PCA)",
+        max_context=run_cfg.tuning.max_context,
+        horizon=horizon,
+    )
+    evaluate_rolling_truncate_text(
+        reg,
+        X_context_proc=test_context_proc,
+        y_context=test_y_context,
+        text_context=test_text_context,
+        X_eval_proc=X_test_proc,
+        y_eval=y_test,
+        text_eval=text_test,
+        label="Test (text truncate)",
+        max_context=run_cfg.tuning.max_context,
+        horizon=horizon,
+    )
+    tuned_text_test = evaluate_rolling(
+        reg,
+        X_context_proc=test_context_proc,
+        y_context=test_y_context,
+        text_context=test_text_context,
+        X_eval_proc=X_test_proc,
+        y_eval=y_test,
+        text_eval=text_test,
+        use_text=True,
+        label="Test (with text attn)",
+        max_context=run_cfg.tuning.max_context,
+        horizon=horizon,
+    )
+    if run_cfg.tuning.debug_text_effect:
+        delta_mae = tuned_text_test[0] - tuned_no_text_test[0]
+        delta_rmse = tuned_text_test[1] - tuned_no_text_test[1]
+        delta_mape = tuned_text_test[2] - tuned_no_text_test[2]
+        print(
+            f"Test text effect | ΔMAE={delta_mae:.6f} | "
+            f"ΔRMSE={delta_rmse:.6f} | ΔMAPE={delta_mape:.6f}%"
+        )
+        print("Tuned text-mixing params:", get_trainining_info(reg))
+    else:
+        print("Tuned text-mixing gates:", text_mixing_gate_stats(reg))
+
+    restored_best_state_dict = _clone_state_dict_to_cpu(reg.model.state_dict())
+    print(
+        f"\n== Top {len(fine_tune_outcome.top_validation_mae_checkpoints)} "
+        "Validation-MAE Models On Test =="
+    )
+    for rank, checkpoint in enumerate(fine_tune_outcome.top_validation_mae_checkpoints, start=1):
+        reg.model.load_state_dict(checkpoint.state_dict)
+        print(f"Rank {rank} | Epoch {checkpoint.epoch:02d} | Val MAE: {checkpoint.val_mae:.4f}")
+        evaluate_rolling(
+            reg,
+            X_context_proc=test_context_proc,
+            y_context=test_y_context,
+            text_context=test_text_context,
+            X_eval_proc=X_test_proc,
+            y_eval=y_test,
+            text_eval=text_test,
+            use_text=True,
+            label=f"Test top {rank} (with text attn)",
+            max_context=run_cfg.tuning.max_context,
+            horizon=horizon,
+        )
+    reg.model.load_state_dict(restored_best_state_dict)
+
+    return HorizonRunResult(
+        horizon=horizon,
+        best_epoch=fine_tune_outcome.best_epoch,
+        tuned_no_text_test=tuned_no_text_test,
+        tuned_text_test=tuned_text_test,
+    )
 
 
 def main() -> None:
@@ -1022,229 +1344,29 @@ def main() -> None:
     print(
         "Split sizes: "
         f"context={len(data_splits.y_context)} train={len(data_splits.y_train)} "
-        f"val={len(data_splits.y_val)} test={len(data_splits.y_test)}"
+        f"val={len(data_splits.y_val)} test={len(data_splits.y_test)} | "
+        f"prediction_window={run_cfg.prediction_window}"
     )
 
-    prepared_trial = prepare_fine_tune_trial(run_cfg, data_splits=data_splits)
-    reg = prepared_trial.reg
-    X_context_proc = prepared_trial.X_context_proc
-    X_train_proc = prepared_trial.X_train_proc
-    X_val_proc = prepared_trial.X_val_proc
-    X_test_proc = prepared_trial.X_test_proc
-    y_context = data_splits.y_context
-    text_context = data_splits.text_context
-    y_train = data_splits.y_train
-    text_train = data_splits.text_train
-    y_val = data_splits.y_val
-    text_val = data_splits.text_val
-    y_test = data_splits.y_test
-    text_test = data_splits.text_test
+    horizon_results = [
+        _run_single_horizon(run_cfg, data_splits=data_splits, horizon=horizon)
+        for horizon in prediction_horizons(run_cfg)
+    ]
 
-    print("\n== Baseline (before tuning) ==")
-    baseline_no_text_train = evaluate_rolling(
-        reg,
-        X_context_proc=X_context_proc,
-        y_context=y_context,
-        text_context=text_context,
-        X_eval_proc=X_train_proc,
-        y_eval=y_train,
-        text_eval=text_train,
-        use_text=False,
-        label="Train (no text attn)",
-        max_context=run_cfg.tuning.max_context,
-    )
-    baseline_pca_train = evaluate_rolling_pca(
-        reg,
-        X_context_proc=X_context_proc,
-        y_context=y_context,
-        text_context=text_context,
-        X_eval_proc=X_train_proc,
-        y_eval=y_train,
-        text_eval=text_train,
-        label="Train (PCA)",
-        max_context=run_cfg.tuning.max_context,
-    )
-    baseline_truncate_train = evaluate_rolling_truncate_text(
-        reg,
-        X_context_proc=X_context_proc,
-        y_context=y_context,
-        text_context=text_context,
-        X_eval_proc=X_train_proc,
-        y_eval=y_train,
-        text_eval=text_train,
-        label="Train (text truncate)",
-        max_context=run_cfg.tuning.max_context,
-    )
-    val_context_proc = np.concatenate((X_context_proc, X_train_proc))
-    val_y_context = np.concatenate((y_context, y_train))
-    val_text_context = np.concatenate((text_context, text_train), axis=0)
-    baseline_no_text_val = evaluate_rolling(
-        reg,
-        X_context_proc=val_context_proc,
-        y_context=val_y_context,
-        text_context=val_text_context,
-        X_eval_proc=X_val_proc,
-        y_eval=y_val,
-        text_eval=text_val,
-        use_text=False,
-        label="Val (no text attn)",
-        max_context=run_cfg.tuning.max_context,
-    )
-    baseline_text_val = evaluate_rolling(
-        reg,
-        X_context_proc=val_context_proc,
-        y_context=val_y_context,
-        text_context=val_text_context,
-        X_eval_proc=X_val_proc,
-        y_eval=y_val,
-        text_eval=text_val,
-        use_text=True,
-        label="Val (with text attn)",
-        max_context=run_cfg.tuning.max_context,
-    )
-    baseline_pca_val = evaluate_rolling_pca(
-        reg,
-        X_context_proc=val_context_proc,
-        y_context=val_y_context,
-        text_context=val_text_context,
-        X_eval_proc=X_val_proc,
-        y_eval=y_val,
-        text_eval=text_val,
-        label="Val (PCA)",
-        max_context=run_cfg.tuning.max_context,
-    )
-    baseline_truncate_val = evaluate_rolling_truncate_text(
-        reg,
-        X_context_proc=val_context_proc,
-        y_context=val_y_context,
-        text_context=val_text_context,
-        X_eval_proc=X_val_proc,
-        y_eval=y_val,
-        text_eval=text_val,
-        label="Val (text truncate)",
-        max_context=run_cfg.tuning.max_context,
-    )
-    if run_cfg.tuning.debug_text_effect:
-        delta_mae = baseline_text_val[0] - baseline_no_text_val[0]
-        delta_rmse = baseline_text_val[1] - baseline_no_text_val[1]
-        delta_mape = baseline_text_val[2] - baseline_no_text_val[2]
-        print(
-            f"Val text effect | ΔMAE={delta_mae:.6f} | "
-            f"ΔRMSE={delta_rmse:.6f} | ΔMAPE={delta_mape:.6f}%"
+    if len(horizon_results) > 1:
+        print("\n================ Mean Summary Across Horizons ================")
+        _format_metrics(
+            "Mean test (no text attn)",
+            *_mean_metric_triplets([result.tuned_no_text_test for result in horizon_results]),
+        )
+        _format_metrics(
+            "Mean test (with text attn)",
+            *_mean_metric_triplets([result.tuned_text_test for result in horizon_results]),
         )
         print(
-            "Initial text-mixing params:",
-            get_trainining_info(reg),
+            "Best epochs by horizon: "
+            + ", ".join(f"h{result.horizon}={result.best_epoch}" for result in horizon_results)
         )
-    else:
-        print("Initial text-mixing gates:", text_mixing_gate_stats(reg))
-
-    print("\n== Fine-tuning text-mixing parameters ==")
-    top_validation_mae_checkpoints = fine_tune_prepared_trial(
-        prepared_trial,
-        tuning_cfg=run_cfg.tuning,
-    )
-
-    print("\n== After tuning ==")
-    _format_metrics("Train (no text attn)", *baseline_no_text_train)
-    _format_metrics("Train (PCA)", *baseline_pca_train)
-    if baseline_truncate_train is not None:
-        _format_metrics(baseline_truncate_train[1], *baseline_truncate_train[0])
-    evaluate_rolling(
-        reg,
-        X_context_proc=X_context_proc,
-        y_context=y_context,
-        text_context=text_context,
-        X_eval_proc=X_train_proc,
-        y_eval=y_train,
-        text_eval=text_train,
-        use_text=True,
-        label="Train (with text attn)",
-        max_context=run_cfg.tuning.max_context,
-    )
-
-    test_context_proc = np.concatenate((X_context_proc, X_train_proc, X_val_proc))
-    test_y_context = np.concatenate((y_context, y_train, y_val))
-    test_text_context = np.concatenate((text_context, text_train, text_val), axis=0)
-    tuned_no_text_test = evaluate_rolling(
-        reg,
-        X_context_proc=test_context_proc,
-        y_context=test_y_context,
-        text_context=test_text_context,
-        X_eval_proc=X_test_proc,
-        y_eval=y_test,
-        text_eval=text_test,
-        use_text=False,
-        label="Test (no text attn)",
-        max_context=run_cfg.tuning.max_context,
-    )
-    evaluate_rolling_pca(
-        reg,
-        X_context_proc=test_context_proc,
-        y_context=test_y_context,
-        text_context=test_text_context,
-        X_eval_proc=X_test_proc,
-        y_eval=y_test,
-        text_eval=text_test,
-        label="Test (PCA)",
-        max_context=run_cfg.tuning.max_context,
-    )
-    evaluate_rolling_truncate_text(
-        reg,
-        X_context_proc=test_context_proc,
-        y_context=test_y_context,
-        text_context=test_text_context,
-        X_eval_proc=X_test_proc,
-        y_eval=y_test,
-        text_eval=text_test,
-        label="Test (text truncate)",
-        max_context=run_cfg.tuning.max_context,
-    )
-    tuned_text_test = evaluate_rolling(
-        reg,
-        X_context_proc=test_context_proc,
-        y_context=test_y_context,
-        text_context=test_text_context,
-        X_eval_proc=X_test_proc,
-        y_eval=y_test,
-        text_eval=text_test,
-        use_text=True,
-        label="Test (with text attn)",
-        max_context=run_cfg.tuning.max_context,
-    )
-    if run_cfg.tuning.debug_text_effect:
-        delta_mae = tuned_text_test[0] - tuned_no_text_test[0]
-        delta_rmse = tuned_text_test[1] - tuned_no_text_test[1]
-        delta_mape = tuned_text_test[2] - tuned_no_text_test[2]
-        print(
-            f"Test text effect | ΔMAE={delta_mae:.6f} | "
-            f"ΔRMSE={delta_rmse:.6f} | ΔMAPE={delta_mape:.6f}%"
-        )
-        print(
-            "Tuned text-mixing params:",
-            get_trainining_info(reg),
-        )
-    else:
-        print("Tuned text-mixing gates:", text_mixing_gate_stats(reg))
-
-    restored_best_state_dict = _clone_state_dict_to_cpu(reg.model.state_dict())
-    print(f"\n== Top {len(top_validation_mae_checkpoints)} Validation-MAE Models On Test ==")
-    for rank, checkpoint in enumerate(top_validation_mae_checkpoints, start=1):
-        reg.model.load_state_dict(checkpoint.state_dict)
-        print(f"Rank {rank} | Epoch {checkpoint.epoch:02d} | Val MAE: {checkpoint.val_mae:.4f}")
-        evaluate_rolling(
-            reg,
-            X_context_proc=test_context_proc,
-            y_context=test_y_context,
-            text_context=test_text_context,
-            X_eval_proc=X_test_proc,
-            y_eval=y_test,
-            text_eval=text_test,
-            use_text=True,
-            label=f"Test top {rank} (with text attn)",
-            max_context=run_cfg.tuning.max_context,
-        )
-    reg.model.load_state_dict(restored_best_state_dict)
 
 
 if __name__ == "__main__":

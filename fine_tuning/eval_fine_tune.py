@@ -24,6 +24,77 @@ def _compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> tuple[float, flo
     return mae, rmse, mape
 
 
+def _available_history_counts(
+    context_len: int,
+    idx: int,
+    horizon: int,
+) -> tuple[int, int]:
+    """
+    Return how many context and eval labels are observable for a direct horizon.
+
+    For horizon h, a row's label only becomes observable after h-1 additional
+    timestamps have passed. This helper returns the number of usable rows from:
+    - the fixed context prefix
+    - the rolling eval prefix
+    """
+    if context_len < 0:
+        raise ValueError("context_len must be non-negative.")
+    if idx < 0:
+        raise ValueError("idx must be non-negative.")
+    if horizon <= 0:
+        raise ValueError("horizon must be positive.")
+
+    total_available = context_len + idx - horizon + 1
+    if total_available <= 0:
+        raise ValueError(
+            "Not enough observed history for the requested horizon. "
+            f"Got context_len={context_len}, idx={idx}, horizon={horizon}."
+        )
+
+    context_count = min(context_len, total_available)
+    eval_count = max(0, total_available - context_len)
+    return context_count, eval_count
+
+
+def _build_rolling_train_step(
+    *,
+    X_context_proc: np.ndarray,
+    y_context: np.ndarray,
+    text_context: np.ndarray | None,
+    X_eval_proc: np.ndarray,
+    y_eval: np.ndarray,
+    text_eval: np.ndarray | None,
+    idx: int,
+    horizon: int,
+    max_context: int | None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+    context_count, eval_count = _available_history_counts(len(y_context), idx, horizon)
+
+    X_parts = [X_context_proc[:context_count]]
+    y_parts = [y_context[:context_count]]
+    text_parts: list[np.ndarray] = []
+    if text_context is not None:
+        text_parts.append(text_context[:context_count])
+
+    if eval_count > 0:
+        X_parts.append(X_eval_proc[:eval_count])
+        y_parts.append(y_eval[:eval_count])
+        if text_eval is not None:
+            text_parts.append(text_eval[:eval_count])
+
+    X_train_step = np.concatenate(X_parts, axis=0)
+    y_train_step = np.concatenate(y_parts, axis=0)
+    text_train_step = np.concatenate(text_parts, axis=0) if text_parts else None
+
+    if max_context is not None:
+        X_train_step = X_train_step[-max_context:]
+        y_train_step = y_train_step[-max_context:]
+        if text_train_step is not None:
+            text_train_step = text_train_step[-max_context:]
+
+    return X_train_step, y_train_step, text_train_step
+
+
 def _append_text_pca_features(
     *,
     X_train_step: np.ndarray,
@@ -161,6 +232,7 @@ def evaluate_rolling(
     use_text: bool,
     label: str,
     max_context: int | None,
+    horizon: int = 1,
 ) -> tuple[float, float, float]:
     """
     Rolling evaluation with a fixed context and a sequential eval window.
@@ -176,22 +248,17 @@ def evaluate_rolling(
     preds = np.zeros(len(y_eval), dtype=np.float32)
     with torch.no_grad():
         for idx in range(len(y_eval)):
-            X_train_full = np.concatenate((X_context_proc, X_eval_proc[:idx]))
-            y_train_full = np.concatenate((y_context, y_eval[:idx]))
-            if use_text:
-                text_train_full = np.concatenate((text_context, text_eval[:idx]), axis=0)
-
-            if max_context is not None:
-                X_train_step = X_train_full[-max_context:]
-                y_train_step = y_train_full[-max_context:]
-                if use_text:
-                    text_train_step = text_train_full[-max_context:]
-            else:
-                X_train_step = X_train_full
-                y_train_step = y_train_full
-                if use_text:
-                    text_train_step = text_train_full
-
+            X_train_step, y_train_step, text_train_step = _build_rolling_train_step(
+                X_context_proc=X_context_proc,
+                y_context=y_context,
+                text_context=text_context if use_text else None,
+                X_eval_proc=X_eval_proc,
+                y_eval=y_eval,
+                text_eval=text_eval if use_text else None,
+                idx=idx,
+                horizon=horizon,
+                max_context=max_context,
+            )
             X_test_step = X_eval_proc[idx:idx + 1]
 
             if use_text:
@@ -237,6 +304,7 @@ def evaluate_rolling_pca(
     label: str,
     max_context: int | None,
     max_total_features: int = 100,
+    horizon: int = 1,
 ) -> tuple[float, float, float]:
     """
     Rolling evaluation like `evaluate_rolling`, but appends PCA-compressed text features to X.
@@ -252,19 +320,17 @@ def evaluate_rolling_pca(
 
     with torch.no_grad():
         for idx in range(len(y_eval)):
-            X_train_full = np.concatenate((X_context_proc, X_eval_proc[:idx]))
-            y_train_full = np.concatenate((y_context, y_eval[:idx]))
-            text_train_full = np.concatenate((text_context, text_eval[:idx]), axis=0)
-
-            if max_context is not None:
-                X_train_step = X_train_full[-max_context:]
-                y_train_step = y_train_full[-max_context:]
-                text_train_step = text_train_full[-max_context:]
-            else:
-                X_train_step = X_train_full
-                y_train_step = y_train_full
-                text_train_step = text_train_full
-
+            X_train_step, y_train_step, text_train_step = _build_rolling_train_step(
+                X_context_proc=X_context_proc,
+                y_context=y_context,
+                text_context=text_context,
+                X_eval_proc=X_eval_proc,
+                y_eval=y_eval,
+                text_eval=text_eval,
+                idx=idx,
+                horizon=horizon,
+                max_context=max_context,
+            )
             X_test_step = X_eval_proc[idx:idx + 1]
             text_test_step = text_eval[idx:idx + 1]
 
@@ -309,6 +375,7 @@ def evaluate_rolling_truncate_text(
     label: str,
     max_context: int | None,
     max_total_features: int = 100,
+    horizon: int = 1,
 ) -> tuple[tuple[float, float, float], str] | None:
     """
     Rolling evaluation like `evaluate_rolling_pca`, but uses the first k dims of each lag's
@@ -338,19 +405,17 @@ def evaluate_rolling_truncate_text(
 
     with torch.no_grad():
         for idx in range(len(y_eval)):
-            X_train_full = np.concatenate((X_context_proc, X_eval_proc[:idx]))
-            y_train_full = np.concatenate((y_context, y_eval[:idx]))
-            text_train_full = np.concatenate((text_context, text_eval[:idx]), axis=0)
-
-            if max_context is not None:
-                X_train_step = X_train_full[-max_context:]
-                y_train_step = y_train_full[-max_context:]
-                text_train_step = text_train_full[-max_context:]
-            else:
-                X_train_step = X_train_full
-                y_train_step = y_train_full
-                text_train_step = text_train_full
-
+            X_train_step, y_train_step, text_train_step = _build_rolling_train_step(
+                X_context_proc=X_context_proc,
+                y_context=y_context,
+                text_context=text_context,
+                X_eval_proc=X_eval_proc,
+                y_eval=y_eval,
+                text_eval=text_eval,
+                idx=idx,
+                horizon=horizon,
+                max_context=max_context,
+            )
             X_test_step = X_eval_proc[idx:idx + 1]
             text_test_step = text_eval[idx:idx + 1]
 
