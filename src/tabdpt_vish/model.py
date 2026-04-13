@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from torch.nn import GELU, LayerNorm, Linear
 
 from .utils import clip_outliers, flash_context, normalize_data
-
+from .projectors import VectorPerceiver, ProjectionHead, LinearHead
 
 class TabDPTModel(nn.Module):
     def __init__(
@@ -20,7 +20,7 @@ class TabDPTModel(nn.Module):
         nlayers: int,
         num_features: int,
         use_flash: bool = True,
-        clip_sigma: float = 4.
+        clip_sigma: float = 4.,
     ):
         super().__init__()
         self.n_out = n_out
@@ -45,13 +45,13 @@ class TabDPTModel(nn.Module):
         self.head = nn.Sequential(nn.Linear(ninp, nhid), nn.GELU(), nn.Linear(nhid, n_out + 1))
         self.clip_sigma = clip_sigma
 
-    @flash_context
+    # @flash_context
     def forward(
         self,
         x_src: torch.Tensor,
         y_src: torch.Tensor,
         task: Literal["cls", "reg"],  # classification or regression
-        text_enhanced_attn_weight: torch.Tensor | None = None,
+        text_enhanced_vector: torch.Tensor | None = None,
     ) -> torch.Tensor:
         x_src = x_src.transpose(0, 1)
         y_src = y_src.squeeze(-1).transpose(0, 1)
@@ -73,13 +73,23 @@ class TabDPTModel(nn.Module):
         y_src = self.y_encoder(y_src.unsqueeze(-1))
         train_x = x_src[:eval_pos] + y_src
         src = torch.cat([train_x, x_src[eval_pos:]], 0)
-        if text_enhanced_attn_weight is None:
+        if text_enhanced_vector is None:
             for layer in self.transformer_encoder:
                 src = layer(src, eval_pos)
         else:   
             for layer in self.transformer_encoder[:-1]:
                 src = layer(src, eval_pos)
-            src = self.transformer_encoder[-1](src, eval_pos, text_enhanced_attn_weight)
+            src2 = torch.cat([src, text_enhanced_vector.permute(1,0,2)], dim=-1)
+            # src = src + self.finalprojector(src2)
+            src = src + self.ff_norm(self.finalprojector(src2))
+            src = self.transformer_encoder[-1](src, eval_pos)
+            # src = self.transformer_encoder[-1](src, eval_pos, text_enhanced_attn_weight)
+        #concat text enhanced projector output to src
+        # if text_enhanced_vector is not None:
+        #     # text_enhanced_vector = text_enhanced_vector.expand(src.size(0), -1, -1)
+        #     src = torch.cat((src,text_enhanced_vector.permute(1,0,2)),dim=-1)
+        #     #project it back
+        #     src = self.finalprojector(src)
         pred = self.head(src)
         if task == "reg":
             pred = pred[eval_pos:, ..., -1]
@@ -124,37 +134,16 @@ class TabDPTModel(nn.Module):
             )
             # Copy pretrained weights to the new layer
             model.transformer_encoder[last_idx].load_state_dict(last_layer.state_dict(), strict=False)
-            model.projection_head = ProjectionHead(input_dim=4096*3, output_dim=16)
-        
+            # model.perciever = VectorPerceiver(input_dim=4096, output_dim=512, num_heads=1, dropout=0.25)
+            model.projection_head = ProjectionHead(input_dim=4096*3, output_dim=512)
+            model.coarseprojector = LinearHead(input_dim=512, output_dim=32)
+            # model.finalprojector = nn.Sequential(LinearHead(input_dim=512+config.model.emsize, output_dim=config.model.emsize), nn.LayerNorm(config.model.emsize))
+            model.ff_norm = nn.LayerNorm(config.model.emsize + 512)
+            model.finalprojector = nn.Sequential(Linear(512+config.model.emsize, config.model.emsize), GELU(), Linear( config.model.emsize,  config.model.emsize))
+
         model.to(config.env.device)
         model.eval()
         return model
-
-class ProjectionHead(nn.Module):
-    def __init__(self, input_dim: int, output_dim: int):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(input_dim, output_dim),
-            nn.LayerNorm(output_dim),
-            nn.GELU(),
-            nn.Linear(output_dim, output_dim),
-            nn.LayerNorm(output_dim),
-        )
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)
-
-class PercieverModel(nn.Module):
-    def __init__(self, input_dim: int, output_dim: int):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(input_dim, output_dim),
-            nn.LayerNorm(output_dim),
-            nn.GELU(),
-            nn.Linear(output_dim, output_dim),
-            nn.LayerNorm(output_dim),
-        )
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)
 
 class TransformerEncoderLayer(nn.Module):
     def __init__(self, embed_dim, num_heads, ff_dim, text_enhanced=False):
@@ -198,7 +187,7 @@ class TransformerEncoderLayer(nn.Module):
         x = x.transpose(0, 1)
         B, L, _ = x.size()
         h = self.attn_norm(x)
-        q = self.q_proj(h)
+        q = self.q_proj(h) # N_train + N_text x embed_dim
         k, v = self.kv_proj(h[:, :eval_pos]).chunk(2, dim=-1)
         q = q.view(B, L, self.num_heads, self.head_dim).transpose(1, 2)
         k = k.view(B, eval_pos, self.num_heads, self.head_dim).transpose(1, 2)

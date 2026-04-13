@@ -104,19 +104,37 @@ def freeze_all_but_last_gate(reg: TabDPTRegressor) -> tuple[torch.nn.Parameter, 
     #TODO: Vish change, only unfreeze the projection layers
     for p in reg.model.parameters():
         p.requires_grad_(False)
-    last_block = reg.model.transformer_encoder[-1]
-    gate = get_last_layer_gate_param(reg)
-    gate.requires_grad_(True)
-    tunable_params: list[torch.nn.Parameter] = [gate]
-    for linear in last_block.text_attn_linears:
-        for p in linear.parameters():
-            p.requires_grad_(True)
-            tunable_params.append(p)
+    # last_block = reg.model.transformer_encoder[-1]
+    # gate = get_last_layer_gate_param(reg)
+    # gate.requires_grad_(True)
+    tunable_params: list[torch.nn.Parameter] = []
+    # for linear in last_block.text_attn_linears:
+        # for p in linear.parameters():
+            # p.requires_grad_(True)
+            # tunable_params.append(p)
     
-    projection_head = reg.model.projection_head
-    projection_head.requires_grad_(True)
-    tunable_params.extend(list(projection_head.parameters()))
-    return gate, tunable_params
+    # perciever_head = reg.model.perciever
+    perciever_head = reg.model.projection_head
+    perciever_head.requires_grad_(True)
+    coarseprojector = reg.model.coarseprojector
+    coarseprojector.requires_grad_(True)
+    finalprojector = reg.model.finalprojector
+    finalprojector.requires_grad_(True)
+    # finalhead = reg.model.head
+    # finalhead.requires_grad_(True)
+
+    print("Training parameters size:")
+    print(f"  Projection head: {sum(p.numel() for p in perciever_head.parameters())} params")
+    print(f"  Coarse projector: {sum(p.numel() for p in coarseprojector.parameters())} params")
+    print(f"  Final projector: {sum(p.numel() for p in finalprojector.parameters())} params")
+    # print(f"  Final head: {sum(p.numel() for p in finalhead.parameters())} params")
+    
+    tunable_params.extend(list(perciever_head.parameters())
+                          + list(coarseprojector.parameters())
+                          + list(finalprojector.parameters())
+                        #   + list(finalhead.parameters())
+                        )
+    return tunable_params
 
 def gate_stats(gate_logits: torch.Tensor) -> str:
     """Human-readable summary for per-head gate logits and their sigmoid values."""
@@ -186,7 +204,7 @@ def fine_tune_external_gate(
     - Within the batch, each row is predicted from base context plus earlier batch rows
     - Gradients are accumulated point-by-point and averaged over the batch
     """    
-    gate, tunable_params = freeze_all_but_last_gate(reg)
+    tunable_params = freeze_all_but_last_gate(reg)
 
     optimizer = schedulefree.AdamWScheduleFree(tunable_params, lr=tuning_cfg.gate_lr, weight_decay=0.0)
     print("Tuning last-layer text-mixing params")
@@ -234,8 +252,15 @@ def fine_tune_external_gate(
                 y_context_tensor = y_context_step.unsqueeze(0).to(reg.device)
 
                 #TODO add text context to fit and pred
-                x_text_tensor_train = reg.model.projection_head(train_text_batch.to(reg.device).reshape(train_text_batch.shape[0], train_text_batch.shape[1], -1))
-                x_text_tensor_test = reg.model.projection_head(test_text_batch.to(reg.device).reshape(test_text_batch.shape[0], test_text_batch.shape[1], -1))
+                # perciver_trainoutput = reg.model.perciever(train_text_batch.squeeze(0).to(reg.device)).unsqueeze(0)
+                # perciver_testoutput = reg.model.perciever(test_text_batch.squeeze(0).to(reg.device)).unsqueeze(0)
+                
+                perciver_trainoutput = reg.model.projection_head(train_text_batch.to(reg.device).reshape(train_text_batch.shape[0], train_text_batch.shape[1], -1))
+                perciver_testoutput = reg.model.projection_head(test_text_batch.to(reg.device).reshape(test_text_batch.shape[0], test_text_batch.shape[1], -1))
+
+                x_text_tensor_train = reg.model.coarseprojector(perciver_trainoutput)
+                x_text_tensor_test = reg.model.coarseprojector(perciver_testoutput)
+
                 X_train_tensor = torch.cat([X_train_tensor, x_text_tensor_train], dim=-1)
                 X_test_tensor = torch.cat([X_test_tensor, x_text_tensor_test], dim=-1)
             
@@ -246,7 +271,9 @@ def fine_tune_external_gate(
                     x_src=torch.cat([X_train_tensor, X_test_tensor], dim=1),
                     y_src=y_context_tensor.unsqueeze(-1),
                     task="reg",
-                    text_enhanced_attn_weight=attn_weight_external,
+                    # text_enhanced_vector=torch.cat([perciver_trainoutput, perciver_testoutput], dim=1),
+                    # text_enhanced_vector=perciver_testoutput,
+                    text_enhanced_vector=None,
                 ).squeeze(-1).reshape(-1)
                 preds_for_log.append(pred_point)
 
@@ -258,9 +285,9 @@ def fine_tune_external_gate(
             y_target = y_tune[start:end].to(reg.device)
             optimizer.step()
 
-            if tuning_cfg.gate_logit_clamp is not None:
-                with torch.no_grad():
-                    gate.clamp_(-tuning_cfg.gate_logit_clamp, tuning_cfg.gate_logit_clamp)
+            # if tuning_cfg.gate_logit_clamp is not None:
+            #     with torch.no_grad():
+            #         gate.clamp_(-tuning_cfg.gate_logit_clamp, tuning_cfg.gate_logit_clamp)
 
             if (step_idx + 1) % tuning_cfg.step_log_every == 0 or step_idx == num_steps - 1:
                 preds_np = preds.detach().cpu().numpy()
@@ -274,7 +301,7 @@ def fine_tune_external_gate(
         if tuning_cfg.log_text_mixing_params:
             print(
                 f"Epoch {epoch:02d} text-mixing params | "
-                f"{get_trainining_info(reg, gate)}"
+                # f"{get_trainining_info(reg, gate)}"
             )
         if tuning_cfg.eval_each_epoch:
             if X_eval_proc is None or y_eval is None or text_eval is None:

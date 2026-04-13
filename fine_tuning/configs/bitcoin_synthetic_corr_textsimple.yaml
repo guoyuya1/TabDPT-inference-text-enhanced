@@ -21,9 +21,9 @@ model:
   model_weight_path: null
   text_enhanced: true
   use_flash: false
-  compile_model: true
+  compile_model: false
 tuning:
-  epochs: 20
+  epochs: 100
   gate_lr: 0.5
   gate_logit_clamp: 10.0
   tune_batch_size: 650

@@ -132,16 +132,17 @@ def evaluate_rolling(
 
             X_test_step = X_eval_proc[idx:idx + 1]
 
+            text_enhanced_vector = None
             if use_text:
                 train_text_batch = text_train_step.unsqueeze(0)
                 test_text_batch = text_eval[idx:idx + 1].unsqueeze(0)
-                text_enhanced_attn_weight = None
-            #     text_enhanced_attn_weight = reg._compute_attn_weight_pairwise_avg(
-            #         train_text_batch,
-            #         test_text_batch,
-            #     )
-            else:
-                text_enhanced_attn_weight = None
+            #     text_enhanced_attn_weight = None
+            # #     text_enhanced_attn_weight = reg._compute_attn_weight_pairwise_avg(
+            # #         train_text_batch,
+            # #         test_text_batch,
+            # #     )
+            # else:
+            #     text_enhanced_attn_weight = None
 
             X_train_tensor = X_train_step.unsqueeze(0).to(reg.device)
             X_test_tensor = X_test_step.unsqueeze(0).to(reg.device)
@@ -149,10 +150,20 @@ def evaluate_rolling(
 
             #TODO add text context to fit and pred
             if use_text:
-                x_text_tensor_train = reg.model.projection_head(train_text_batch.to(reg.device).reshape(train_text_batch.shape[0], train_text_batch.shape[1], -1))
-                x_text_tensor_test = reg.model.projection_head(test_text_batch.to(reg.device).reshape(test_text_batch.shape[0], test_text_batch.shape[1], -1))
+                # perciver_trainoutput = reg.model.perciever(train_text_batch.squeeze(0).to(reg.device)).unsqueeze(0)
+                # perciver_testoutput = reg.model.perciever(test_text_batch.squeeze(0).to(reg.device)).unsqueeze(0)
+
+                perciver_trainoutput = reg.model.projection_head(train_text_batch.to(reg.device).reshape(train_text_batch.shape[0], train_text_batch.shape[1], -1))
+                perciver_testoutput = reg.model.projection_head(test_text_batch.to(reg.device).reshape(test_text_batch.shape[0], test_text_batch.shape[1], -1))
+
+                x_text_tensor_train = reg.model.coarseprojector(perciver_trainoutput)
+                x_text_tensor_test = reg.model.coarseprojector(perciver_testoutput)
+                
                 X_train_tensor = torch.cat([X_train_tensor, x_text_tensor_train], dim=-1)
                 X_test_tensor = torch.cat([X_test_tensor, x_text_tensor_test], dim=-1)
+            
+                # text_enhanced_vector = torch.cat([perciver_trainoutput, perciver_testoutput], dim=1)
+                text_enhanced_vector = torch.cat([perciver_trainoutput, perciver_testoutput], dim=1)
             
             X_train_tensor = pad_x(X_train_tensor, reg.max_features)
             X_test_tensor = pad_x(X_test_tensor, reg.max_features)
@@ -161,7 +172,8 @@ def evaluate_rolling(
                 x_src=torch.cat([X_train_tensor, X_test_tensor], dim=1),
                 y_src=y_context_tensor.unsqueeze(-1),
                 task="reg",
-                text_enhanced_attn_weight=text_enhanced_attn_weight,
+                # text_enhanced_vector=text_enhanced_vector,
+                text_enhanced_vector=None,
             )
             preds[idx] = pred.squeeze(-1).reshape(-1).detach().cpu().numpy()[0]
 
@@ -233,7 +245,7 @@ def evaluate_rolling_pca(
                 x_src=torch.cat([X_train_tensor, X_test_tensor], dim=1),
                 y_src=y_context_tensor.unsqueeze(-1),
                 task="reg",
-                text_enhanced_attn_weight=None,
+                text_enhanced_vector=None,
             )
             preds[idx] = pred.squeeze(-1).reshape(-1).detach().cpu().numpy()[0]
 
