@@ -1,6 +1,6 @@
 base_config: ../bitcoin_synthetic.yaml
 base_dataset: null
-trials: 150
+trials: 50
 seed: 0
 max_parallel_trials: 4
 gpu_ids: [0, 1]

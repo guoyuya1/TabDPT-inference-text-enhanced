@@ -196,6 +196,45 @@ def _clone_state_dict_to_cpu(state_dict: dict[str, Any]) -> dict[str, Any]:
     return cloned
 
 
+def _is_text_mixing_state_key(state_key: str) -> bool:
+    return (
+        state_key.endswith(".alpha")
+        or ".text_head_projs." in state_key
+        or ".text_head_q_norms." in state_key
+        or ".text_head_k_norms." in state_key
+        or ".text_shared_proj." in state_key
+        or ".text_q_norm." in state_key
+        or ".text_k_norm." in state_key
+        or ".text_attn_linears." in state_key
+    )
+
+
+def _clone_text_mixing_state_dict_to_cpu(model: torch.nn.Module) -> dict[str, Any]:
+    text_mixing_state_dict = {
+        name: value
+        for name, value in model.state_dict().items()
+        if _is_text_mixing_state_key(name)
+    }
+    if not text_mixing_state_dict:
+        raise RuntimeError("No text-mixing parameters were found in the model state_dict.")
+    return _clone_state_dict_to_cpu(text_mixing_state_dict)
+
+
+def _load_text_mixing_state_dict(model: torch.nn.Module, state_dict: dict[str, Any]) -> None:
+    incompatible_keys = model.load_state_dict(state_dict, strict=False)
+    if incompatible_keys.unexpected_keys:
+        raise RuntimeError(
+            "Unexpected keys while loading text-mixing checkpoint bundle: "
+            + ", ".join(sorted(incompatible_keys.unexpected_keys))
+        )
+
+
+def _top_trial_indices(results: list[RandomSearchTrialResult], *, top_k: int) -> set[int]:
+    top_limit = min(top_k, len(results))
+    ranked_results = sorted(results, key=trial_sort_key)
+    return {result.trial_index for result in ranked_results[:top_limit]}
+
+
 def _metrics_from_triplet(metrics: tuple[float, float, float]) -> SummaryMetrics:
     return SummaryMetrics(mae=metrics[0], rmse=metrics[1], mape=metrics[2])
 
@@ -729,7 +768,7 @@ def execute_random_search_trial(
                 val_mape=val_metrics.mape,
             )
         )
-        checkpoint_bundle[horizon] = _clone_state_dict_to_cpu(prepared_trial.reg.model.state_dict())
+        checkpoint_bundle[horizon] = _clone_text_mixing_state_dict_to_cpu(prepared_trial.reg.model)
         print(
             f"Horizon {horizon:02d} complete | best_epoch={fine_tune_outcome.best_epoch} | "
             f"val_mae={val_metrics.mae:.6f} | val_rmse={val_metrics.rmse:.6f} | "
@@ -870,6 +909,7 @@ def _run_trial_batch(
     data_splits: FineTuneDataSplits,
     logs_dir: Path,
     checkpoints_dir: Path,
+    top_k: int,
     max_parallel_trials: int,
     gpu_ids: list[int] | None,
 ) -> tuple[list[RandomSearchTrialResult], dict[int, str]]:
@@ -894,6 +934,10 @@ def _run_trial_batch(
             )
             results.append(artifacts.result)
             checkpoint_paths[trial_index] = artifacts.checkpoint_path
+            _delete_checkpoint_files(
+                checkpoint_paths,
+                keep_trial_indices=_top_trial_indices(results, top_k=top_k),
+            )
         return results, checkpoint_paths
 
     device_slots = _build_parallel_device_slots(
@@ -956,6 +1000,10 @@ def _run_trial_batch(
                 result = artifacts.result
                 results.append(result)
                 checkpoint_paths[result.trial_index] = artifacts.checkpoint_path
+                _delete_checkpoint_files(
+                    checkpoint_paths,
+                    keep_trial_indices=_top_trial_indices(results, top_k=top_k),
+                )
                 print(
                     f"Completed trial {result.trial_index:03d} | "
                     f"device={artifacts.assigned_device or assigned_device or 'auto'} | "
@@ -1328,6 +1376,7 @@ def run_random_search(
         data_splits=data_splits,
         logs_dir=logs_dir,
         checkpoints_dir=checkpoints_dir,
+        top_k=random_search_cfg.top_k,
         max_parallel_trials=random_search_cfg.max_parallel_trials,
         gpu_ids=random_search_cfg.gpu_ids,
     )
@@ -1380,7 +1429,10 @@ def run_random_search(
                 data_splits=data_splits,
                 horizon=horizon_metric.horizon,
             )
-            prepared_trial.reg.model.load_state_dict(checkpoint_bundle[horizon_metric.horizon])
+            _load_text_mixing_state_dict(
+                prepared_trial.reg.model,
+                checkpoint_bundle[horizon_metric.horizon],
+            )
             test_metrics = evaluate_prepared_split(
                 prepared_trial,
                 split_name="test",
