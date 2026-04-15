@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import tempfile
 
 import numpy as np
 import pandas as pd
@@ -76,37 +77,39 @@ for dataset_name, cfg in all_cfgs.items():
     train_data = TimeSeriesDataFrame.from_data_frame(train_df, id_column="item_id", timestamp_column=date_column)
     val_data = TimeSeriesDataFrame.from_data_frame(val_df, id_column="item_id", timestamp_column=date_column)
 
-    predictor = TimeSeriesPredictor(
-        target=target_column,
-        prediction_length=1,
-        eval_metric="MAE",
-    )
+    with tempfile.TemporaryDirectory(prefix=f"ag_hpo_{dataset_name}_") as tmpdir:
+        predictor = TimeSeriesPredictor(
+            target=target_column,
+            prediction_length=1,
+            eval_metric="MAE",
+            path=tmpdir,
+        )
 
-    # HPO with only training data and early stopping based on validation data
-    predictor.fit(
-        train_data,
-        tuning_data=val_data,
-        hyperparameters={
-            "DLinear": {
-                "context_length": space.Int(2, 20),
-                "hidden_dimension": space.Int(8, 64),
-                "kernel_size": space.Int(3, 25),
-                "lr": space.Real(1e-4, 3e-3, log=True),
-                "batch_size": space.Categorical(32, 64, 128),
-                "max_epochs": space.Int(20, 200),
-            }
-        },
-        hyperparameter_tune_kwargs={
-            "num_trials": 20,
-            "searcher": "random",
-            "scheduler": "local",
-        },
-        enable_ensemble=False,
-    )
+        # HPO with only training data and early stopping based on validation data
+        predictor.fit(
+            train_data,
+            tuning_data=val_data,
+            hyperparameters={
+                "DLinear": {
+                    "context_length": space.Int(2, 20),
+                    "hidden_dimension": space.Int(8, 64),
+                    "kernel_size": space.Int(3, 25),
+                    "lr": space.Real(1e-4, 3e-3, log=True),
+                    "batch_size": space.Categorical(32, 64, 128),
+                    "max_epochs": space.Int(20, 200),
+                }
+            },
+            hyperparameter_tune_kwargs={
+                "num_trials": 20,
+                "searcher": "random",
+                "scheduler": "local",
+            },
+            enable_ensemble=False,
+        )
 
-    summary = predictor.fit_summary()
-    best_model = summary["model_best"]
-    best_hps = summary["model_hyperparams"][best_model]
+        summary = predictor.fit_summary()
+        best_model = summary["model_best"]
+        best_hps = summary["model_hyperparams"][best_model]
 
     print("Best model:", best_model)
     print("Best hps:", best_hps)
@@ -118,19 +121,20 @@ for dataset_name, cfg in all_cfgs.items():
         hist_df["item_id"] = 1
         hist_ts = TimeSeriesDataFrame.from_data_frame(hist_df, id_column="item_id", timestamp_column=date_column)
 
-        wf_predictor = TimeSeriesPredictor(
-            target=target_column,
-            prediction_length=1,
-            eval_metric="MAE",
-            path=f"ag_walkforward_{dataset_tag}_{i}",
-        )
-        wf_predictor.fit(
-            hist_ts,
-            hyperparameters={"DLinear": best_hps},
-            enable_ensemble=False,
-        )
+        with tempfile.TemporaryDirectory(prefix=f"ag_walkforward_{dataset_tag}_{i}_") as tmpdir:
+            wf_predictor = TimeSeriesPredictor(
+                target=target_column,
+                prediction_length=1,
+                eval_metric="MAE",
+                path=tmpdir,
+            )
+            wf_predictor.fit(
+                hist_ts,
+                hyperparameters={"DLinear": best_hps},
+                enable_ensemble=False,
+            )
 
-        fcst = wf_predictor.predict(hist_ts, model="DLinear")
+            fcst = wf_predictor.predict(hist_ts, model="DLinear")
         pred_value = fcst["mean"].iloc[-1]
         true_value = df.loc[i, target_column]
 
