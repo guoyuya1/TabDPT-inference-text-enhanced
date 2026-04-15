@@ -1,7 +1,9 @@
 base_config: ../energy_analyzed_baseline.yaml
 base_dataset: null
-trials: 25
+trials: 200
 seed: 0
+max_parallel_trials: 4
+gpu_ids: [0, 1]
 top_k: 50
 search_space:
   text_attn_layers:

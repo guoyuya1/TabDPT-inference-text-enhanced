@@ -64,5 +64,46 @@ def load_tabular_text_dataset(
     return X, y, text
 
 
+def build_direct_multi_horizon_dataset(
+    X: np.ndarray,
+    y: np.ndarray,
+    text: np.ndarray,
+    *,
+    prediction_window: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Align one-step rows into a direct multi-horizon dataset.
+
+    Returns:
+    - X_aligned: (N - H + 1, F)
+    - Y_multi: (N - H + 1, H), where column h-1 is the direct target for horizon h
+    - text_aligned: (N - H + 1, L, D)
+    """
+    if prediction_window <= 0:
+        raise ValueError("prediction_window must be positive.")
+
+    if len(X) != len(y) or len(X) != len(text):
+        raise ValueError(
+            "X, y, and text must contain the same number of rows. "
+            f"Got len(X)={len(X)}, len(y)={len(y)}, len(text)={len(text)}."
+        )
+
+    usable_rows = len(y) - prediction_window + 1
+    if usable_rows <= 0:
+        raise ValueError(
+            "prediction_window is too large for the dataset length. "
+            f"Got len(y)={len(y)} and prediction_window={prediction_window}."
+        )
+
+    X_aligned = X[:usable_rows]
+    text_aligned = text[:usable_rows]
+    horizon_targets = [
+        y[horizon_offset:horizon_offset + usable_rows]
+        for horizon_offset in range(prediction_window)
+    ]
+    Y_multi = np.stack(horizon_targets, axis=1).astype(np.float32, copy=False)
+    return X_aligned, Y_multi, text_aligned
+
+
 # Backward-compatible alias for older scripts/notebooks.
 load_climate_dataset = load_tabular_text_dataset

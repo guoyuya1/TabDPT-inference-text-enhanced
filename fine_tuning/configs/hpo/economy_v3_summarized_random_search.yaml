@@ -1,8 +1,8 @@
-base_config: ../bitcoin_v2_analyzed_concise.yaml
+base_config: ../economy_v3_summarized.yaml
 base_dataset: null
-trials: 100
+trials: 200
 seed: 0
-max_parallel_trials: 8
+max_parallel_trials: 4
 gpu_ids: [0, 1]
 top_k: 50
 search_space:
@@ -13,7 +13,7 @@ search_space:
     - [13, 14, 15, 16]
     - [1, 2]
     - [1, 2, 16]
-    # - [4, 8, 12, 16]
+    - [4, 8, 12, 16]
   epochs: [100]
   gate_lr: [0.03, 0.05, 0.1, 0.2, 0.3]
   text_attn_lr: [0.0003, 0.001, 0.003, 0.01, 0.03]

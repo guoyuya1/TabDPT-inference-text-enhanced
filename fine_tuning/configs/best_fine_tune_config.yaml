@@ -29,6 +29,7 @@ train_ratio: 0.5
 val_ratio: 0.1
 test_ratio: 0.2
 seed: 0
+prediction_window: 3
 model:
   device: auto
   model_weight_path: null

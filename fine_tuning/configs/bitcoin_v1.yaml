@@ -42,6 +42,7 @@ tuning:
   log_text_score_stats: true
   text_score_sample_size: 8
 seed: 0
+prediction_window: 3
 model:
   device: auto
   model_weight_path: null
