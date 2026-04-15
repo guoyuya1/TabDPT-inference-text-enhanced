@@ -1,6 +1,6 @@
 base_config: ../economy_v3_analyzed.yaml
 base_dataset: null
-trials: 50
+trials: 200
 seed: 0
 max_parallel_trials: 4
 gpu_ids: [0, 1]

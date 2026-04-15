@@ -40,6 +40,6 @@ tuning:
   debug_text_effect: true
   log_text_mixing_params: true
   step_log_every: 50
-  early_stopping_patience: 5
+  early_stopping_patience: 3
   log_text_score_stats: true
   text_score_sample_size: 8
