@@ -43,6 +43,19 @@ def _resolve_text_attention_layer_numbers(
     return validated_layers
 
 
+def _share_text_attention_modules(transformer_encoder: nn.ModuleList) -> None:
+    shared_owner = None
+    for layer in transformer_encoder:
+        if not getattr(layer, "text_enhanced", False):
+            continue
+        if shared_owner is None:
+            shared_owner = layer
+            continue
+        layer.text_head_projs = shared_owner.text_head_projs
+        layer.text_head_q_norms = shared_owner.text_head_q_norms
+        layer.text_head_k_norms = shared_owner.text_head_k_norms
+
+
 class TabDPTModel(nn.Module):
     def __init__(
         self,
@@ -171,6 +184,7 @@ class TabDPTModel(nn.Module):
                 # Copy pretrained weights to the new layer while leaving text modules freshly initialized.
                 model.transformer_encoder[layer_idx].load_state_dict(base_layer.state_dict(), strict=False)
 
+        _share_text_attention_modules(model.transformer_encoder)
         model.to(config.env.device)
         model.eval()
         return model
