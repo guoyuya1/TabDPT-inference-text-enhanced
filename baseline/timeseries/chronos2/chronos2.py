@@ -65,8 +65,7 @@ for dataset_name, cfg in all_cfgs.items():
     df["item_id"] = 1
 
     n_rows = len(df)
-    context_end = int(n_rows * float(cfg.get("context_ratio") or 0.0))
-    train_end = context_end + int(n_rows * float(cfg.get("train_ratio") or 0.0))
+    train_end = int(n_rows * float(cfg.get("train_ratio") or 0.0))
     val_end = train_end + int(n_rows * float(cfg.get("val_ratio") or 0.0))
     if not val_end and cfg.get("fit_rows") is not None:
         val_end = int(cfg["fit_rows"])
@@ -114,7 +113,7 @@ for dataset_name, cfg in all_cfgs.items():
     )
     fine_tuned_predictor.fit(
         TimeSeriesDataFrame.from_data_frame(
-            df.iloc[context_end:train_end], id_column="item_id", timestamp_column=date_column
+            df.iloc[:train_end], id_column="item_id", timestamp_column=date_column
         ),
         tuning_data=TimeSeriesDataFrame.from_data_frame(
             df.iloc[train_end:val_end], id_column="item_id", timestamp_column=date_column

@@ -7,10 +7,10 @@ bitcoin:
     - Low
     - Volume
   target_column: Close
-  max_rows: 1200
+  max_rows: 1000
   train_ratio: 0.7
-  val_ratio: 0.1
-  test_ratio: 0.2
+  val_ratio: 0.15
+  test_ratio: 0.15
 
 economy:
   data_path: data/processed_data/economy/Economy_with_text_summarized_with_embeddings_Qwen_Qwen3-Embedding-4B_lag_3.csv
@@ -19,6 +19,7 @@ economy:
     - Exports
     - Imports
   target_column: OT
+  max_rows: 1000
   train_ratio: 0.7
-  val_ratio: 0.1
-  test_ratio: 0.2
+  val_ratio: 0.15
+  test_ratio: 0.15
