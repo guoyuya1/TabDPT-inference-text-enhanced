@@ -313,6 +313,7 @@ def prepare_fine_tune_trial(
     *,
     data_splits: FineTuneDataSplits | None = None,
     horizon: int = 1,
+    pure_tabdpt: bool = False,
 ) -> PreparedFineTuneTrial:
     if data_splits is None:
         data_splits = load_and_split_fine_tune_data(run_cfg)
@@ -321,7 +322,7 @@ def prepare_fine_tune_trial(
     reg = load_tabdpt_regressor(
         device=run_cfg.model.device,
         model_weight_path=run_cfg.model.model_weight_path,
-        text_attn_layers=run_cfg.model.text_attn_layers,
+        text_attn_layers=None if pure_tabdpt else run_cfg.model.text_attn_layers,
         use_flash=run_cfg.model.use_flash,
         compile_model=run_cfg.model.compile_model,
     )
@@ -394,6 +395,93 @@ def _prepared_eval_inputs(
             splits.text_test,
         )
     raise ValueError(f"Unsupported split_name: {split_name!r}. Expected 'train', 'val', or 'test'.")
+
+
+def _reset_compiler_state() -> None:
+    dynamo = getattr(torch, "_dynamo", None)
+    if dynamo is not None and hasattr(dynamo, "reset"):
+        dynamo.reset()
+
+
+def evaluate_fresh_baseline_metric(
+    run_cfg: DataConfig,
+    *,
+    data_splits: FineTuneDataSplits,
+    horizon: int,
+    split_name: str,
+    baseline_kind: str,
+    label: str,
+) -> tuple[float, float, float] | tuple[tuple[float, float, float], str] | None:
+    _reset_compiler_state()
+    prepared_trial = prepare_fine_tune_trial(
+        run_cfg,
+        data_splits=data_splits,
+        horizon=horizon,
+        pure_tabdpt=baseline_kind != "with_text",
+    )
+    X_context_proc, y_context, text_context, X_eval_proc, y_eval, text_eval = _prepared_eval_inputs(
+        prepared_trial,
+        split_name=split_name,
+    )
+
+    if baseline_kind == "no_text":
+        return evaluate_rolling(
+            prepared_trial.reg,
+            X_context_proc=X_context_proc,
+            y_context=y_context,
+            text_context=text_context,
+            X_eval_proc=X_eval_proc,
+            y_eval=y_eval,
+            text_eval=text_eval,
+            use_text=False,
+            label=label,
+            max_context=run_cfg.tuning.max_context,
+            horizon=horizon,
+        )
+    if baseline_kind == "with_text":
+        return evaluate_rolling(
+            prepared_trial.reg,
+            X_context_proc=X_context_proc,
+            y_context=y_context,
+            text_context=text_context,
+            X_eval_proc=X_eval_proc,
+            y_eval=y_eval,
+            text_eval=text_eval,
+            use_text=True,
+            label=label,
+            max_context=run_cfg.tuning.max_context,
+            horizon=horizon,
+        )
+    if baseline_kind == "pca":
+        return evaluate_rolling_pca(
+            prepared_trial.reg,
+            X_context_proc=X_context_proc,
+            y_context=y_context,
+            text_context=text_context,
+            X_eval_proc=X_eval_proc,
+            y_eval=y_eval,
+            text_eval=text_eval,
+            label=label,
+            max_context=run_cfg.tuning.max_context,
+            horizon=horizon,
+        )
+    if baseline_kind == "truncate_text":
+        return evaluate_rolling_truncate_text(
+            prepared_trial.reg,
+            X_context_proc=X_context_proc,
+            y_context=y_context,
+            text_context=text_context,
+            X_eval_proc=X_eval_proc,
+            y_eval=y_eval,
+            text_eval=text_eval,
+            label=label,
+            max_context=run_cfg.tuning.max_context,
+            horizon=horizon,
+        )
+    raise ValueError(
+        f"Unsupported baseline_kind: {baseline_kind!r}. "
+        "Expected 'no_text', 'with_text', 'pca', or 'truncate_text'."
+    )
 
 
 def _layer_label(layer_idx: int) -> str:
@@ -1104,6 +1192,8 @@ def fine_tune_external_gate(
         best_epoch=best_epoch,
         best_score=best_score,
     )
+
+
 def _mean_metric_triplets(metric_triplets: list[tuple[float, float, float]]) -> tuple[float, float, float]:
     return tuple(
         float(np.mean([triplet[idx] for triplet in metric_triplets]))
@@ -1118,6 +1208,66 @@ def _run_single_horizon(
     horizon: int,
 ) -> HorizonRunResult:
     print(f"\n{'=' * 16} Horizon {horizon}/{run_cfg.prediction_window} {'=' * 16}")
+
+    print("\n== Baseline (before tuning) ==")
+    baseline_no_text_train = evaluate_fresh_baseline_metric(
+        run_cfg,
+        data_splits=data_splits,
+        horizon=horizon,
+        split_name="train",
+        baseline_kind="no_text",
+        label="Train (no text attn)",
+    )
+    baseline_pca_train = evaluate_fresh_baseline_metric(
+        run_cfg,
+        data_splits=data_splits,
+        horizon=horizon,
+        split_name="train",
+        baseline_kind="pca",
+        label="Train (PCA)",
+    )
+    baseline_truncate_train = evaluate_fresh_baseline_metric(
+        run_cfg,
+        data_splits=data_splits,
+        horizon=horizon,
+        split_name="train",
+        baseline_kind="truncate_text",
+        label="Train (text truncate)",
+    )
+    baseline_no_text_val = evaluate_fresh_baseline_metric(
+        run_cfg,
+        data_splits=data_splits,
+        horizon=horizon,
+        split_name="val",
+        baseline_kind="no_text",
+        label="Val (no text attn)",
+    )
+    baseline_text_val = evaluate_fresh_baseline_metric(
+        run_cfg,
+        data_splits=data_splits,
+        horizon=horizon,
+        split_name="val",
+        baseline_kind="with_text",
+        label="Val (with text attn)",
+    )
+    baseline_pca_val = evaluate_fresh_baseline_metric(
+        run_cfg,
+        data_splits=data_splits,
+        horizon=horizon,
+        split_name="val",
+        baseline_kind="pca",
+        label="Val (PCA)",
+    )
+    baseline_truncate_val = evaluate_fresh_baseline_metric(
+        run_cfg,
+        data_splits=data_splits,
+        horizon=horizon,
+        split_name="val",
+        baseline_kind="truncate_text",
+        label="Val (text truncate)",
+    )
+
+    _reset_compiler_state()
     prepared_trial = prepare_fine_tune_trial(run_cfg, data_splits=data_splits, horizon=horizon)
     reg = prepared_trial.reg
     splits = prepared_trial.splits
@@ -1133,98 +1283,6 @@ def _run_single_horizon(
     text_val = splits.text_val
     y_test = splits.y_test
     text_test = splits.text_test
-
-    print("\n== Baseline (before tuning) ==")
-    baseline_no_text_train = evaluate_rolling(
-        reg,
-        X_context_proc=X_context_proc,
-        y_context=y_context,
-        text_context=text_context,
-        X_eval_proc=X_train_proc,
-        y_eval=y_train,
-        text_eval=text_train,
-        use_text=False,
-        label="Train (no text attn)",
-        max_context=run_cfg.tuning.max_context,
-        horizon=horizon,
-    )
-    baseline_pca_train = evaluate_rolling_pca(
-        reg,
-        X_context_proc=X_context_proc,
-        y_context=y_context,
-        text_context=text_context,
-        X_eval_proc=X_train_proc,
-        y_eval=y_train,
-        text_eval=text_train,
-        label="Train (PCA)",
-        max_context=run_cfg.tuning.max_context,
-        horizon=horizon,
-    )
-    baseline_truncate_train = evaluate_rolling_truncate_text(
-        reg,
-        X_context_proc=X_context_proc,
-        y_context=y_context,
-        text_context=text_context,
-        X_eval_proc=X_train_proc,
-        y_eval=y_train,
-        text_eval=text_train,
-        label="Train (text truncate)",
-        max_context=run_cfg.tuning.max_context,
-        horizon=horizon,
-    )
-    val_context_proc = np.concatenate((X_context_proc, X_train_proc))
-    val_y_context = np.concatenate((y_context, y_train))
-    val_text_context = np.concatenate((text_context, text_train), axis=0)
-    baseline_no_text_val = evaluate_rolling(
-        reg,
-        X_context_proc=val_context_proc,
-        y_context=val_y_context,
-        text_context=val_text_context,
-        X_eval_proc=X_val_proc,
-        y_eval=y_val,
-        text_eval=text_val,
-        use_text=False,
-        label="Val (no text attn)",
-        max_context=run_cfg.tuning.max_context,
-        horizon=horizon,
-    )
-    baseline_text_val = evaluate_rolling(
-        reg,
-        X_context_proc=val_context_proc,
-        y_context=val_y_context,
-        text_context=val_text_context,
-        X_eval_proc=X_val_proc,
-        y_eval=y_val,
-        text_eval=text_val,
-        use_text=True,
-        label="Val (with text attn)",
-        max_context=run_cfg.tuning.max_context,
-        horizon=horizon,
-    )
-    baseline_pca_val = evaluate_rolling_pca(
-        reg,
-        X_context_proc=val_context_proc,
-        y_context=val_y_context,
-        text_context=val_text_context,
-        X_eval_proc=X_val_proc,
-        y_eval=y_val,
-        text_eval=text_val,
-        label="Val (PCA)",
-        max_context=run_cfg.tuning.max_context,
-        horizon=horizon,
-    )
-    baseline_truncate_val = evaluate_rolling_truncate_text(
-        reg,
-        X_context_proc=val_context_proc,
-        y_context=val_y_context,
-        text_context=val_text_context,
-        X_eval_proc=X_val_proc,
-        y_eval=y_val,
-        text_eval=text_val,
-        label="Val (text truncate)",
-        max_context=run_cfg.tuning.max_context,
-        horizon=horizon,
-    )
     if run_cfg.tuning.debug_text_effect:
         delta_mae = baseline_text_val[0] - baseline_no_text_val[0]
         delta_rmse = baseline_text_val[1] - baseline_no_text_val[1]
