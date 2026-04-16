@@ -121,6 +121,8 @@ class SearchSpaceConfig:
     gate_logit_clamp: list[float | None] | None = None
     tune_batch_size: list[int] | None = None
     max_context: list[int | None] | None = None
+    target_lag_count: list[int] | None = None
+    embedding_lag_count: list[int] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -157,6 +159,16 @@ class SearchSpaceConfig:
                 self.max_context,
                 allow_none_values=True,
             ),
+        )
+        object.__setattr__(
+            self,
+            "target_lag_count",
+            _validate_int_choices("search_space.target_lag_count", self.target_lag_count),
+        )
+        object.__setattr__(
+            self,
+            "embedding_lag_count",
+            _validate_int_choices("search_space.embedding_lag_count", self.embedding_lag_count),
         )
         if not self.has_dimensions():
             raise ValueError("Random search config must define at least one non-empty search dimension.")

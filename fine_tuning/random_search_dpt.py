@@ -8,6 +8,7 @@ import csv
 import json
 import multiprocessing
 import random
+import re
 import sys
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
@@ -56,6 +57,8 @@ SEARCH_FIELD_NAMES = (
     "gate_logit_clamp",
     "tune_batch_size",
     "max_context",
+    "target_lag_count",
+    "embedding_lag_count",
 )
 
 
@@ -68,6 +71,8 @@ class RandomSearchTrialSpec:
     gate_logit_clamp: float | None
     tune_batch_size: int
     max_context: int | None
+    target_lag_count: int | None = None
+    embedding_lag_count: int | None = None
 
 
 @dataclass(frozen=True)
@@ -85,6 +90,8 @@ class RandomSearchTrialResult:
     val_rmse: float
     val_mape: float
     ranking_score: float
+    target_lag_count: int | None = None
+    embedding_lag_count: int | None = None
     best_epoch: int | None = None
     test_loss: float | None = None
     test_mae: float | None = None
@@ -151,6 +158,16 @@ class TrialExecutionArtifacts:
     result: RandomSearchTrialResult
     checkpoint_path: str
     assigned_device: str | None = None
+
+
+@dataclass(frozen=True)
+class LagSearchMetadata:
+    target_lag_prefix: str
+    base_target_lag_count: int | None
+    available_target_lag_count: int
+    embedding_lag_prefix: str | None
+    base_embedding_lag_count: int | None
+    available_embedding_lag_count: int
 
 
 class _TeeWriter:
@@ -254,6 +271,251 @@ def _mean_rolling_metrics(metrics_list: list[RollingMetrics]) -> RollingMetrics:
         rmse=float(np.mean([metrics.rmse for metrics in metrics_list])),
         mape=float(np.mean([metrics.mape for metrics in metrics_list])),
     )
+
+
+def _read_csv_header(path: str | Path) -> list[str]:
+    resolved_path = Path(path)
+    with resolved_path.open("r", encoding="utf-8", newline="") as f:
+        reader = csv.reader(f)
+        try:
+            header = next(reader)
+        except StopIteration as exc:
+            raise ValueError(f"Dataset file is empty: {resolved_path}") from exc
+    return header
+
+
+def _contiguous_lag_count(lag_values: set[int]) -> int:
+    max_count = 0
+    while (max_count + 1) in lag_values:
+        max_count += 1
+    return max_count
+
+
+def _infer_lag_prefix_from_columns(
+    columns: list[str],
+    *,
+    label: str,
+) -> tuple[str, list[int]]:
+    if not columns:
+        raise ValueError(f"{label} must contain at least one lagged column.")
+
+    prefixes: set[str] = set()
+    lag_values: list[int] = []
+    for column in columns:
+        match = re.fullmatch(r"(.+)_lag(\d+)", column)
+        if match is None:
+            raise ValueError(
+                f"{label} must contain only lagged columns named like '<prefix>_lagN'. "
+                f"Got: {column!r}"
+            )
+        prefixes.add(match.group(1))
+        lag_values.append(int(match.group(2)))
+
+    if len(prefixes) != 1:
+        raise ValueError(
+            f"{label} must map to exactly one lagged column family. Got prefixes: {sorted(prefixes)}"
+        )
+    return next(iter(prefixes)), lag_values
+
+
+def _infer_lag_prefix_from_template(template: str, *, label: str) -> str:
+    if "{lag}" not in template:
+        raise ValueError(f"{label} must include the '{{lag}}' placeholder.")
+    example_column = template.format(lag=1)
+    match = re.fullmatch(r"(.+)_lag(\d+)", example_column)
+    if match is None:
+        raise ValueError(
+            f"{label} must format to '<prefix>_lagN'. Got: {example_column!r}"
+        )
+    return match.group(1)
+
+
+def discover_lag_search_metadata(base_run_cfg: DataConfig) -> LagSearchMetadata:
+    header = _read_csv_header(base_run_cfg.data_path)
+
+    target_lag_pattern = re.compile(rf"^{re.escape(base_run_cfg.target_column)}_lag(\d+)$")
+    available_target_lags = {
+        int(match.group(1))
+        for column in header
+        if (match := target_lag_pattern.fullmatch(column)) is not None
+    }
+
+    base_target_lag_columns = [
+        column
+        for column in base_run_cfg.numeric_features
+        if target_lag_pattern.fullmatch(column) is not None
+    ]
+    base_target_lag_count = len(base_target_lag_columns) or None
+
+    embedding_lag_prefix: str | None
+    base_embedding_lag_count: int | None
+    available_embedding_lag_count: int
+    if base_run_cfg.embedding_columns is not None:
+        embedding_lag_prefix, base_embedding_lags = _infer_lag_prefix_from_columns(
+            list(base_run_cfg.embedding_columns),
+            label="embedding_columns",
+        )
+        base_embedding_lag_count = len(base_embedding_lags)
+    elif base_run_cfg.embedding_column_template is not None:
+        embedding_lag_prefix = _infer_lag_prefix_from_template(
+            base_run_cfg.embedding_column_template,
+            label="embedding_column_template",
+        )
+        base_embedding_lag_count = (
+            len(base_run_cfg.embedding_lags) if base_run_cfg.embedding_lags else None
+        )
+    else:
+        embedding_lag_prefix = None
+        base_embedding_lag_count = None
+
+    if embedding_lag_prefix is None:
+        available_embedding_lag_count = 0
+    else:
+        embedding_lag_pattern = re.compile(rf"^{re.escape(embedding_lag_prefix)}_lag(\d+)$")
+        available_embedding_lag_count = _contiguous_lag_count(
+            {
+                int(match.group(1))
+                for column in header
+                if (match := embedding_lag_pattern.fullmatch(column)) is not None
+            }
+        )
+
+    return LagSearchMetadata(
+        target_lag_prefix=base_run_cfg.target_column,
+        base_target_lag_count=base_target_lag_count,
+        available_target_lag_count=_contiguous_lag_count(available_target_lags),
+        embedding_lag_prefix=embedding_lag_prefix,
+        base_embedding_lag_count=base_embedding_lag_count,
+        available_embedding_lag_count=available_embedding_lag_count,
+    )
+
+
+def _validate_requested_lag_counts(
+    *,
+    requested_counts: list[int] | None,
+    available_count: int,
+    search_key: str,
+    family_label: str,
+) -> None:
+    if requested_counts is None:
+        return
+    invalid_counts = sorted({count for count in requested_counts if count > available_count})
+    if invalid_counts:
+        raise ValueError(
+            f"{search_key} requested {family_label} lag counts {invalid_counts}, but only "
+            f"contiguous lag1..lag{available_count} are available."
+        )
+
+
+def validate_lag_search_space(
+    base_run_cfg: DataConfig,
+    search_space_cfg: SearchSpaceConfig,
+    lag_search_metadata: LagSearchMetadata,
+) -> None:
+    if search_space_cfg.target_lag_count is not None:
+        if lag_search_metadata.base_target_lag_count is None:
+            raise ValueError(
+                "search_space.target_lag_count requires base config numeric_features to include "
+                f"lagged target columns matching '{base_run_cfg.target_column}_lagN'."
+            )
+        _validate_requested_lag_counts(
+            requested_counts=search_space_cfg.target_lag_count,
+            available_count=lag_search_metadata.available_target_lag_count,
+            search_key="search_space.target_lag_count",
+            family_label=f"target columns for '{base_run_cfg.target_column}'",
+        )
+
+    if search_space_cfg.embedding_lag_count is not None:
+        if lag_search_metadata.embedding_lag_prefix is None:
+            raise ValueError(
+                "search_space.embedding_lag_count requires the base config to define one lagged "
+                "embedding column family."
+            )
+        _validate_requested_lag_counts(
+            requested_counts=search_space_cfg.embedding_lag_count,
+            available_count=lag_search_metadata.available_embedding_lag_count,
+            search_key="search_space.embedding_lag_count",
+            family_label=f"embedding columns for '{lag_search_metadata.embedding_lag_prefix}'",
+        )
+
+
+def _resolve_target_lag_numeric_features(
+    base_run_cfg: DataConfig,
+    *,
+    target_lag_count: int,
+    lag_search_metadata: LagSearchMetadata,
+) -> list[str]:
+    existing_target_lag_columns = {
+        f"{lag_search_metadata.target_lag_prefix}_lag{lag}"
+        for lag in range(1, lag_search_metadata.available_target_lag_count + 1)
+    }
+    resolved_target_columns = [
+        f"{lag_search_metadata.target_lag_prefix}_lag{lag}"
+        for lag in range(1, target_lag_count + 1)
+    ]
+
+    resolved_numeric_features: list[str] = []
+    inserted_target_block = False
+    for feature in base_run_cfg.numeric_features:
+        if feature in existing_target_lag_columns:
+            if not inserted_target_block:
+                resolved_numeric_features.extend(resolved_target_columns)
+                inserted_target_block = True
+            continue
+        resolved_numeric_features.append(feature)
+
+    if not inserted_target_block:
+        raise ValueError(
+            "Unable to resolve target lag search because the base config does not contain "
+            f"any '{lag_search_metadata.target_lag_prefix}_lagN' numeric feature."
+        )
+    return resolved_numeric_features
+
+
+def _resolve_embedding_columns(
+    *,
+    embedding_lag_count: int,
+    lag_search_metadata: LagSearchMetadata,
+) -> list[str]:
+    if lag_search_metadata.embedding_lag_prefix is None:
+        raise ValueError("Embedding lag resolution requires a discovered embedding lag prefix.")
+    return [
+        f"{lag_search_metadata.embedding_lag_prefix}_lag{lag}"
+        for lag in range(1, embedding_lag_count + 1)
+    ]
+
+
+def _trial_data_cache_key(
+    *,
+    target_lag_count: int | None,
+    embedding_lag_count: int | None,
+) -> tuple[int | None, int | None]:
+    return (target_lag_count, embedding_lag_count)
+
+
+def trial_spec_target_lag_count(run_cfg: DataConfig) -> int | None:
+    target_lag_pattern = re.compile(rf"^{re.escape(run_cfg.target_column)}_lag(\d+)$")
+    count = _contiguous_lag_count(
+        {
+            int(match.group(1))
+            for feature in run_cfg.numeric_features
+            if (match := target_lag_pattern.fullmatch(feature)) is not None
+        }
+    )
+    return count or None
+
+
+def trial_spec_embedding_lag_count(run_cfg: DataConfig) -> int | None:
+    if run_cfg.embedding_columns is not None:
+        return _contiguous_lag_count(
+            {
+                int(match.group(1))
+                for column in run_cfg.embedding_columns
+                if (match := re.fullmatch(r"(.+)_lag(\d+)", column)) is not None
+                and int(match.group(2)) > 0
+            }
+        ) or None
+    return _contiguous_lag_count({lag for lag in run_cfg.embedding_lags if lag > 0}) or None
 
 
 def _serialize_summary_metrics(metrics: SummaryMetrics | None, *, label: str | None = None) -> dict[str, Any] | None:
@@ -616,7 +878,11 @@ def run_shared_baseline_evaluation(
 def build_search_choices(
     base_run_cfg: DataConfig,
     search_space_cfg: SearchSpaceConfig,
+    *,
+    lag_search_metadata: LagSearchMetadata | None = None,
 ) -> dict[str, list[object]]:
+    if lag_search_metadata is not None:
+        validate_lag_search_space(base_run_cfg, search_space_cfg, lag_search_metadata)
     return {
         "text_attn_layers": (
             [list(choice) for choice in search_space_cfg.text_attn_layers]
@@ -641,6 +907,12 @@ def build_search_choices(
             else [base_run_cfg.tuning.tune_batch_size]
         ),
         "max_context": search_space_cfg.max_context if search_space_cfg.max_context is not None else [base_run_cfg.tuning.max_context],
+        "target_lag_count": search_space_cfg.target_lag_count if search_space_cfg.target_lag_count is not None else [None],
+        "embedding_lag_count": (
+            search_space_cfg.embedding_lag_count
+            if search_space_cfg.embedding_lag_count is not None
+            else [None]
+        ),
     }
 
 
@@ -673,8 +945,14 @@ def _decode_trial_spec(
 def sample_trial_specs(
     base_run_cfg: DataConfig,
     random_search_cfg: RandomSearchConfig,
+    *,
+    lag_search_metadata: LagSearchMetadata | None = None,
 ) -> tuple[list[RandomSearchTrialSpec], int]:
-    search_choices = build_search_choices(base_run_cfg, random_search_cfg.search_space)
+    search_choices = build_search_choices(
+        base_run_cfg,
+        random_search_cfg.search_space,
+        lag_search_metadata=lag_search_metadata,
+    )
     total_combinations = count_search_combinations(search_choices)
     sampled_count = min(random_search_cfg.trials, total_combinations)
     sampled_indices = random.Random(random_search_cfg.seed).sample(range(total_combinations), k=sampled_count)
@@ -687,7 +965,33 @@ def sample_trial_specs(
 def resolve_trial_config(
     base_run_cfg: DataConfig,
     trial_spec: RandomSearchTrialSpec,
+    *,
+    lag_search_metadata: LagSearchMetadata | None = None,
 ) -> DataConfig:
+    resolved_numeric_features = list(base_run_cfg.numeric_features)
+    resolved_embedding_columns = (
+        None if base_run_cfg.embedding_columns is None else list(base_run_cfg.embedding_columns)
+    )
+    resolved_embedding_lags = list(base_run_cfg.embedding_lags)
+
+    if trial_spec.target_lag_count is not None:
+        if lag_search_metadata is None:
+            raise ValueError("target_lag_count resolution requires lag_search_metadata.")
+        resolved_numeric_features = _resolve_target_lag_numeric_features(
+            base_run_cfg,
+            target_lag_count=trial_spec.target_lag_count,
+            lag_search_metadata=lag_search_metadata,
+        )
+
+    if trial_spec.embedding_lag_count is not None:
+        if lag_search_metadata is None:
+            raise ValueError("embedding_lag_count resolution requires lag_search_metadata.")
+        resolved_embedding_columns = _resolve_embedding_columns(
+            embedding_lag_count=trial_spec.embedding_lag_count,
+            lag_search_metadata=lag_search_metadata,
+        )
+        resolved_embedding_lags = []
+
     updated_model_cfg = replace(
         base_run_cfg.model,
         text_attn_layers=list(trial_spec.text_attn_layers),
@@ -701,7 +1005,14 @@ def resolve_trial_config(
         tune_batch_size=trial_spec.tune_batch_size,
         max_context=trial_spec.max_context,
     )
-    return replace(base_run_cfg, model=updated_model_cfg, tuning=updated_tuning_cfg)
+    return replace(
+        base_run_cfg,
+        numeric_features=resolved_numeric_features,
+        embedding_columns=resolved_embedding_columns,
+        embedding_lags=resolved_embedding_lags,
+        model=updated_model_cfg,
+        tuning=updated_tuning_cfg,
+    )
 
 
 def objective_score(metric_name: str, metrics: RollingMetrics) -> float:
@@ -735,6 +1046,8 @@ def execute_random_search_trial(
         f"gate_logit_clamp={trial_cfg.tuning.gate_logit_clamp} | "
         f"tune_batch_size={trial_cfg.tuning.tune_batch_size} | "
         f"max_context={trial_cfg.tuning.max_context} | "
+        f"target_lag_count={trial_spec_target_lag_count(trial_cfg)} | "
+        f"embedding_lag_count={trial_spec_embedding_lag_count(trial_cfg)} | "
         f"prediction_window={trial_cfg.prediction_window}"
     )
     print("Per-trial baseline evaluations are skipped; shared HPO baseline is evaluated once separately.")
@@ -786,6 +1099,8 @@ def execute_random_search_trial(
         gate_logit_clamp=trial_cfg.tuning.gate_logit_clamp,
         tune_batch_size=trial_cfg.tuning.tune_batch_size,
         max_context=trial_cfg.tuning.max_context,
+        target_lag_count=trial_spec_target_lag_count(trial_cfg),
+        embedding_lag_count=trial_spec_embedding_lag_count(trial_cfg),
         val_loss=aggregate_val_metrics.loss,
         val_mae=aggregate_val_metrics.mae,
         val_rmse=aggregate_val_metrics.rmse,
@@ -906,7 +1221,7 @@ def _execute_trial_with_logging(
 def _run_trial_batch(
     trial_cfgs: dict[int, DataConfig],
     *,
-    data_splits: FineTuneDataSplits,
+    trial_data_splits: dict[int, FineTuneDataSplits],
     logs_dir: Path,
     checkpoints_dir: Path,
     top_k: int,
@@ -926,7 +1241,7 @@ def _run_trial_batch(
             artifacts = _execute_trial_with_logging(
                 trial_cfg,
                 trial_index=trial_index,
-                data_splits=data_splits,
+                data_splits=trial_data_splits[trial_index],
                 trial_log_path=trial_log_path,
                 checkpoint_path=checkpoint_path,
                 assigned_device=None,
@@ -972,7 +1287,7 @@ def _run_trial_batch(
                 _execute_trial_with_logging,
                 next_trial_cfg,
                 trial_index=next_trial_index,
-                data_splits=data_splits,
+                data_splits=trial_data_splits[next_trial_index],
                 trial_log_path=str(logs_dir / f"trial_{next_trial_index:03d}.log"),
                 checkpoint_path=str(checkpoints_dir / f"trial_{next_trial_index:03d}.pt"),
                 assigned_device=assigned_device,
@@ -1035,6 +1350,8 @@ def _serialize_trial_result(
         "gate_logit_clamp": result.gate_logit_clamp,
         "tune_batch_size": result.tune_batch_size,
         "max_context": result.max_context,
+        "target_lag_count": result.target_lag_count,
+        "embedding_lag_count": result.embedding_lag_count,
         "val_loss": result.val_loss,
         "val_mae": result.val_mae,
         "val_rmse": result.val_rmse,
@@ -1063,6 +1380,8 @@ def _write_trial_results_csv(
         "gate_logit_clamp",
         "tune_batch_size",
         "max_context",
+        "target_lag_count",
+        "embedding_lag_count",
         "val_loss",
         "val_mae",
         "val_rmse",
@@ -1268,7 +1587,9 @@ def _write_summary_log(
             f"text_attn_lr={best_trial.text_attn_lr} | "
             f"gate_logit_clamp={best_trial.gate_logit_clamp} | "
             f"tune_batch_size={best_trial.tune_batch_size} | "
-            f"max_context={best_trial.max_context}"
+            f"max_context={best_trial.max_context} | "
+            f"target_lag_count={best_trial.target_lag_count} | "
+            f"embedding_lag_count={best_trial.embedding_lag_count}"
         ),
         "",
     ]
@@ -1298,7 +1619,9 @@ def _write_summary_log(
                 f"test_mape={result.test_mape:.6f}% | text_attn_layers={result.text_attn_layers} | "
                 f"epochs={result.epochs} | gate_lr={result.gate_lr} | "
                 f"text_attn_lr={result.text_attn_lr} | gate_logit_clamp={result.gate_logit_clamp} | "
-                f"tune_batch_size={result.tune_batch_size} | max_context={result.max_context}"
+                f"tune_batch_size={result.tune_batch_size} | max_context={result.max_context} | "
+                f"target_lag_count={result.target_lag_count} | "
+                f"embedding_lag_count={result.embedding_lag_count}"
             )
         )
         if result.horizon_metrics is not None:
@@ -1328,6 +1651,15 @@ def run_random_search(
         base_run_cfg = load_fine_tune_config(random_search_cfg.base_config, random_search_cfg.base_dataset)
     if data_splits is None:
         data_splits = load_and_split_fine_tune_data(base_run_cfg)
+    lag_search_requested = (
+        random_search_cfg.search_space.target_lag_count is not None
+        or random_search_cfg.search_space.embedding_lag_count is not None
+    )
+    lag_search_metadata = (
+        discover_lag_search_metadata(base_run_cfg)
+        if lag_search_requested
+        else None
+    )
 
     print(
         "Random search setup | "
@@ -1341,8 +1673,18 @@ def run_random_search(
         f"context={len(data_splits.y_context)} train={len(data_splits.y_train)} "
         f"val={len(data_splits.y_val)} test={len(data_splits.y_test)}"
     )
+    if lag_search_requested:
+        print(
+            "Lag search enabled | "
+            f"target_lag_count_choices={random_search_cfg.search_space.target_lag_count} | "
+            f"embedding_lag_count_choices={random_search_cfg.search_space.embedding_lag_count}"
+        )
 
-    trial_specs, total_combinations = sample_trial_specs(base_run_cfg, random_search_cfg)
+    trial_specs, total_combinations = sample_trial_specs(
+        base_run_cfg,
+        random_search_cfg,
+        lag_search_metadata=lag_search_metadata,
+    )
     if random_search_cfg.trials > total_combinations:
         print(
             f"Requested {random_search_cfg.trials} trials but search space has only "
@@ -1368,12 +1710,28 @@ def run_random_search(
     )
 
     trial_cfgs: dict[int, DataConfig] = {}
+    trial_data_splits: dict[int, FineTuneDataSplits] = {}
+    data_splits_cache: dict[tuple[int | None, int | None], FineTuneDataSplits] = {
+        _trial_data_cache_key(target_lag_count=None, embedding_lag_count=None): data_splits
+    }
     for trial_index, trial_spec in enumerate(trial_specs, start=1):
-        trial_cfgs[trial_index] = resolve_trial_config(base_run_cfg, trial_spec)
+        trial_cfg = resolve_trial_config(
+            base_run_cfg,
+            trial_spec,
+            lag_search_metadata=lag_search_metadata,
+        )
+        trial_cfgs[trial_index] = trial_cfg
+        data_key = _trial_data_cache_key(
+            target_lag_count=trial_spec.target_lag_count,
+            embedding_lag_count=trial_spec.embedding_lag_count,
+        )
+        if data_key not in data_splits_cache:
+            data_splits_cache[data_key] = load_and_split_fine_tune_data(trial_cfg)
+        trial_data_splits[trial_index] = data_splits_cache[data_key]
 
     results, checkpoint_paths = _run_trial_batch(
         trial_cfgs,
-        data_splits=data_splits,
+        trial_data_splits=trial_data_splits,
         logs_dir=logs_dir,
         checkpoints_dir=checkpoints_dir,
         top_k=random_search_cfg.top_k,
@@ -1426,7 +1784,7 @@ def run_random_search(
         for horizon_metric in horizon_metrics_source:
             prepared_trial = prepare_fine_tune_trial(
                 trial_cfg,
-                data_splits=data_splits,
+                data_splits=trial_data_splits[result.trial_index],
                 horizon=horizon_metric.horizon,
             )
             _load_text_mixing_state_dict(
@@ -1480,7 +1838,9 @@ def run_random_search(
         f"best_epoch={best_result.best_epoch} | "
         f"objective={best_result.ranking_score:.6f} | "
         f"val_mae={best_result.val_mae:.6f} | "
-        f"test_mae={best_result.test_mae:.6f}"
+        f"test_mae={best_result.test_mae:.6f} | "
+        f"target_lag_count={best_result.target_lag_count} | "
+        f"embedding_lag_count={best_result.embedding_lag_count}"
     )
 
     print(f"Top {top_limit} trials:")
@@ -1489,7 +1849,9 @@ def run_random_search(
             f"{rank}. trial_index={result.trial_index} | best_epoch={result.best_epoch} | "
             f"objective={result.ranking_score:.6f} | "
             f"val_mae={result.val_mae:.6f} | test_mae={result.test_mae:.6f} | "
-            f"text_attn_layers={result.text_attn_layers}"
+            f"text_attn_layers={result.text_attn_layers} | "
+            f"target_lag_count={result.target_lag_count} | "
+            f"embedding_lag_count={result.embedding_lag_count}"
         )
         if result.horizon_metrics is not None:
             for metrics in result.horizon_metrics:
