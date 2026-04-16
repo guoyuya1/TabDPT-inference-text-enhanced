@@ -39,7 +39,11 @@ try:
         evaluate_rolling_truncate_text,
     )
     from .fine_tune_configs import DataConfig, TuningConfig, load_fine_tune_config
-    from .load_dataset import build_direct_multi_horizon_dataset, load_tabular_text_dataset
+    from .load_dataset import (
+        build_direct_multi_horizon_dataset,
+        load_tabular_text_dataset,
+        select_direct_horizon_targets,
+    )
     from .split_ts import time_split
 except ImportError:
     from eval_fine_tune import (
@@ -50,7 +54,11 @@ except ImportError:
         evaluate_rolling_truncate_text,
     )
     from fine_tune_configs import DataConfig, TuningConfig, load_fine_tune_config
-    from load_dataset import build_direct_multi_horizon_dataset, load_tabular_text_dataset
+    from load_dataset import (
+        build_direct_multi_horizon_dataset,
+        load_tabular_text_dataset,
+        select_direct_horizon_targets,
+    )
     from split_ts import time_split
 
 
@@ -259,36 +267,44 @@ def select_fine_tune_splits_for_horizon(
     *,
     horizon: int,
 ) -> FineTuneDataSplits:
-    if horizon <= 0:
-        raise ValueError("horizon must be positive.")
+    X_context, y_context, text_context = select_direct_horizon_targets(
+        data_splits.X_context,
+        data_splits.y_context,
+        data_splits.text_context,
+        horizon=horizon,
+    )
+    X_train, y_train, text_train = select_direct_horizon_targets(
+        data_splits.X_train,
+        data_splits.y_train,
+        data_splits.text_train,
+        horizon=horizon,
+    )
+    X_val, y_val, text_val = select_direct_horizon_targets(
+        data_splits.X_val,
+        data_splits.y_val,
+        data_splits.text_val,
+        horizon=horizon,
+    )
+    X_test, y_test, text_test = select_direct_horizon_targets(
+        data_splits.X_test,
+        data_splits.y_test,
+        data_splits.text_test,
+        horizon=horizon,
+    )
 
-    if data_splits.y_context.ndim == 1:
-        if horizon != 1:
-            raise ValueError(
-                f"Requested horizon {horizon}, but the loaded splits are single-horizon."
-            )
-        return data_splits
-
-    prediction_window = int(data_splits.y_context.shape[1])
-    if horizon > prediction_window:
-        raise ValueError(
-            f"Requested horizon {horizon}, but only {prediction_window} horizon(s) are available."
-        )
-
-    horizon_idx = horizon - 1
     return FineTuneDataSplits(
-        X_context=data_splits.X_context,
-        y_context=data_splits.y_context[:, horizon_idx].astype(np.float32, copy=False),
-        text_context=data_splits.text_context,
-        X_train=data_splits.X_train,
-        y_train=data_splits.y_train[:, horizon_idx].astype(np.float32, copy=False),
-        text_train=data_splits.text_train,
-        X_val=data_splits.X_val,
-        y_val=data_splits.y_val[:, horizon_idx].astype(np.float32, copy=False),
-        text_val=data_splits.text_val,
-        X_test=data_splits.X_test,
-        y_test=data_splits.y_test[:, horizon_idx].astype(np.float32, copy=False),
-        text_test=data_splits.text_test,
+        X_context=X_context,
+        y_context=y_context,
+        text_context=text_context,
+        X_train=X_train,
+        y_train=y_train,
+        text_train=text_train,
+        X_val=X_val,
+        y_val=y_val,
+        text_val=text_val,
+        X_test=X_test,
+        y_test=y_test,
+        text_test=text_test,
     )
 
 
@@ -456,6 +472,20 @@ def _get_text_enhanced_block_specs(
         (_layer_label(layer_idx), block, _get_text_mixing_modules_for_block(block, layer_label=_layer_label(layer_idx)))
         for layer_idx, block in _get_text_enhanced_blocks(reg)
     ]
+
+
+def _set_text_attn_dropout_mode(
+    reg: TabDPTRegressor,
+    *,
+    enabled: bool,
+) -> None:
+    seen_module_ids: set[int] = set()
+    for _, block in _get_text_enhanced_blocks(reg):
+        dropout = getattr(block, "text_attn_dropout", None)
+        if dropout is None or id(dropout) in seen_module_ids:
+            continue
+        dropout.train(enabled)
+        seen_module_ids.add(id(dropout))
 
 
 def _freeze_all_but_text_mixing(
@@ -898,6 +928,7 @@ def fine_tune_external_gate(
     )
 
     reg.model.eval()
+    _set_text_attn_dropout_mode(reg, enabled=True)
     if hasattr(optimizer, "train"):
         optimizer.train()
 
@@ -912,6 +943,7 @@ def fine_tune_external_gate(
     val_text_context = np.concatenate((text_context, text_train), axis=0)
 
     for epoch in range(1, tuning_cfg.epochs + 1):
+        _set_text_attn_dropout_mode(reg, enabled=True)
         for step_idx in range(num_steps):
             optimizer.zero_grad()
 
@@ -980,6 +1012,7 @@ def fine_tune_external_gate(
                     for gate in gate_params:
                         gate.clamp_(-tuning_cfg.gate_logit_clamp, tuning_cfg.gate_logit_clamp)
 
+        _set_text_attn_dropout_mode(reg, enabled=False)
         train_loss, train_mae, _, _ = _evaluate_rolling_loss_and_mae(
             reg,
             X_context_proc=X_context_proc,
@@ -1050,6 +1083,7 @@ def fine_tune_external_gate(
         raise RuntimeError("Early stopping did not record a best model state.")
 
     reg.model.load_state_dict(best_state_dict)
+    _set_text_attn_dropout_mode(reg, enabled=False)
     print(
         f"Restored best text-mixing params from epoch {best_epoch:02d} "
         f"(validation {tuning_cfg.early_stopping_metric.upper()}={best_score:.4f})"

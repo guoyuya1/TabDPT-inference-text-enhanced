@@ -54,6 +54,7 @@ def _share_text_attention_modules(transformer_encoder: nn.ModuleList) -> None:
         layer.text_head_projs = shared_owner.text_head_projs
         layer.text_head_q_norms = shared_owner.text_head_q_norms
         layer.text_head_k_norms = shared_owner.text_head_k_norms
+        layer.text_attn_dropout = shared_owner.text_attn_dropout
 
 
 class TabDPTModel(nn.Module):
@@ -81,6 +82,7 @@ class TabDPTModel(nn.Module):
                     embed_dim=ninp,
                     num_heads=nhead,
                     ff_dim=nhid,
+                    text_dropout_p=dropout,
                 )
                 for _ in range(nlayers)
             ]
@@ -180,6 +182,7 @@ class TabDPTModel(nn.Module):
                     num_heads=base_layer.num_heads,
                     ff_dim=base_layer.ff[0].out_features,
                     text_enhanced=True,
+                    text_dropout_p=config.training.dropout,
                 )
                 # Copy pretrained weights to the new layer while leaving text modules freshly initialized.
                 model.transformer_encoder[layer_idx].load_state_dict(base_layer.state_dict(), strict=False)
@@ -191,11 +194,12 @@ class TabDPTModel(nn.Module):
 
 
 class TransformerEncoderLayer(nn.Module):
-    def __init__(self, embed_dim, num_heads, ff_dim, text_enhanced=False):
+    def __init__(self, embed_dim, num_heads, ff_dim, text_enhanced=False, text_dropout_p: float = 0.0):
         super().__init__()
         self.embed_dim = embed_dim
         self.head_dim = embed_dim // num_heads
         self.num_heads = num_heads
+        self.text_dropout_p = text_dropout_p
         self.kv_proj = nn.Linear(embed_dim, 2 * embed_dim, bias=False)
         self.q_proj = nn.Linear(embed_dim, embed_dim, bias=False)
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=False)
@@ -232,6 +236,7 @@ class TransformerEncoderLayer(nn.Module):
             self.text_head_k_norms = nn.ModuleList(
                 [LayerNorm(self.TEXT_ENHANCED_HEAD_DIM) for _ in range(num_heads)]
             )
+            self.text_attn_dropout = nn.Dropout(p=self.text_dropout_p)
 
     def _text_attention_logits(self, text_train: torch.Tensor, text_test: torch.Tensor) -> torch.Tensor:
         if text_train.shape[-1] < self.TEXT_ENHANCED_EMBED_DIM or text_test.shape[-1] < self.TEXT_ENHANCED_EMBED_DIM:
@@ -252,8 +257,8 @@ class TransformerEncoderLayer(nn.Module):
             proj = proj.to(dtype=text_train.dtype)
             q_norm = q_norm.to(dtype=text_train.dtype)
             k_norm = k_norm.to(dtype=text_train.dtype)
-            q = q_norm(proj(text_test))
-            k = k_norm(proj(text_train))
+            q = self.text_attn_dropout(q_norm(proj(text_test)))
+            k = self.text_attn_dropout(k_norm(proj(text_train)))
             # (B, N, L, dk) @ (B, M, L, dk) summed over dk -> per-lag scores (B, L, N, M)
             logits_per_lag = torch.einsum("bnld,bmld->blnm", q, k) * scale
             head_logits.append(logits_per_lag.mean(dim=1))

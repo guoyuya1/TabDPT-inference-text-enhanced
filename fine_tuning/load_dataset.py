@@ -75,9 +75,10 @@ def build_direct_multi_horizon_dataset(
     Align one-step rows into a direct multi-horizon dataset.
 
     Returns:
-    - X_aligned: (N - H + 1, F)
-    - Y_multi: (N - H + 1, H), where column h-1 is the direct target for horizon h
-    - text_aligned: (N - H + 1, L, D)
+    - X_aligned: (N, F)
+    - Y_multi: (N, H), where column h-1 is the direct target for horizon h
+      and unavailable future labels are marked as NaN
+    - text_aligned: (N, L, D)
     """
     if prediction_window <= 0:
         raise ValueError("prediction_window must be positive.")
@@ -88,21 +89,48 @@ def build_direct_multi_horizon_dataset(
             f"Got len(X)={len(X)}, len(y)={len(y)}, len(text)={len(text)}."
         )
 
-    usable_rows = len(y) - prediction_window + 1
-    if usable_rows <= 0:
+    if prediction_window > len(y):
         raise ValueError(
             "prediction_window is too large for the dataset length. "
             f"Got len(y)={len(y)} and prediction_window={prediction_window}."
         )
 
-    X_aligned = X[:usable_rows]
-    text_aligned = text[:usable_rows]
-    horizon_targets = [
-        y[horizon_offset:horizon_offset + usable_rows]
-        for horizon_offset in range(prediction_window)
-    ]
-    Y_multi = np.stack(horizon_targets, axis=1).astype(np.float32, copy=False)
+    X_aligned = X
+    text_aligned = text
+    Y_multi = np.full((len(y), prediction_window), np.nan, dtype=np.float32)
+    for horizon_offset in range(prediction_window):
+        usable_rows = len(y) - horizon_offset
+        Y_multi[:usable_rows, horizon_offset] = y[horizon_offset:].astype(np.float32, copy=False)
     return X_aligned, Y_multi, text_aligned
+
+
+def select_direct_horizon_targets(
+    X: np.ndarray,
+    y: np.ndarray,
+    text: np.ndarray,
+    *,
+    horizon: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Select one horizon column and drop rows whose target is not available."""
+    if horizon <= 0:
+        raise ValueError("horizon must be positive.")
+
+    if y.ndim == 1:
+        if horizon != 1:
+            raise ValueError(f"Requested horizon {horizon}, but the loaded targets are single-horizon.")
+        return X, y.astype(np.float32, copy=False), text
+
+    prediction_window = int(y.shape[1])
+    if horizon > prediction_window:
+        raise ValueError(
+            f"Requested horizon {horizon}, but only {prediction_window} horizon(s) are available."
+        )
+
+    horizon_targets = y[:, horizon - 1].astype(np.float32, copy=False)
+    valid_rows = np.isfinite(horizon_targets)
+    if np.all(valid_rows):
+        return X, horizon_targets, text
+    return X[valid_rows], horizon_targets[valid_rows], text[valid_rows]
 
 
 # Backward-compatible alias for older scripts/notebooks.
