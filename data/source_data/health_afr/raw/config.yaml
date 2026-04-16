@@ -1,0 +1,19 @@
+source_csv_path: Health_AFR_with_text.csv
+target_output_path: ../../processed_data/health_afr/Health_AFR_with_text_with_embeddings_{model_name}_lag_{lag}.csv
+
+text_columns:
+  - search_fact
+
+numerical_columns:
+  - OT
+
+target_columns:
+  - OT
+
+date_column: date
+model_name: Qwen/Qwen3-Embedding-8B
+text_lag_days: 14
+numerical_lag_days: 28
+batch_size: 8
+max_length: 1024
+na_text: n/a

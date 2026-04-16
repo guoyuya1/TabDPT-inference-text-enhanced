@@ -4,3 +4,7 @@ tabdpt.egg-info/
 uv.lock
 .venv/
 eval_output/
+*.log
+*.txt
+results/
+logs/

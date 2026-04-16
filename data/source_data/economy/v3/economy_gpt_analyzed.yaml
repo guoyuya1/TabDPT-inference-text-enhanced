@@ -1,0 +1,21 @@
+source_csv_path: economy_gpt_analyzed.csv
+target_output_path: ../../processed_data/economy/v3/economy_gpt_analyzed.csv
+
+text_columns:
+  - search_fact_summary_gpt_5_2
+
+numerical_columns:
+  - Exports # optional
+  - Imports # optional
+  - OT
+
+target_columns:
+  - OT
+
+date_column: date
+model_name: Qwen/Qwen3-Embedding-8B # Qwen/Qwen3-Embedding-0.6B
+text_lag_days: 7
+numerical_lag_days: 7
+batch_size: 8
+max_length: 1024
+na_text: n/a
