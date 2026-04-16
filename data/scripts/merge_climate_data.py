@@ -171,7 +171,7 @@ def _merge_with_interval_overlap(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Join Climate numeric + text CSVs by interval overlap."
+        description="Join numeric + text CSVs by interval overlap."
     )
     parser.add_argument(
         "--min-numeric-start-date",
