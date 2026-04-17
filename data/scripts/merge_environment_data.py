@@ -21,6 +21,54 @@ def _prefer_lowercase_date(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _mode_or_na(series: pd.Series) -> str:
+    values = series.dropna()
+    if values.empty:
+        return "NA"
+    modes = values.mode()
+    if modes.empty:
+        return str(values.iloc[0])
+    return str(modes.iloc[0])
+
+
+def _aggregate_numeric_to_weekly(
+    numeric: pd.DataFrame,
+    *,
+    numeric_date_col: str,
+    numeric_start_date_col: str,
+    numeric_end_date_col: str,
+) -> pd.DataFrame:
+    numeric["__week_period__"] = numeric[numeric_date_col].dt.to_period("W-SUN")
+    numeric["__week_start__"] = numeric["__week_period__"].dt.start_time.dt.normalize()
+    numeric["__week_end__"] = numeric["__week_period__"].dt.end_time.dt.normalize()
+
+    group_cols = ["__week_start__", "__week_end__"]
+    for candidate in ["CBSA", "CBSA Code"]:
+        if candidate in numeric.columns:
+            group_cols.insert(0, candidate)
+
+    agg_map: dict[str, str | callable] = {}
+    for col in numeric.columns:
+        if col in group_cols or col in {"__week_period__"}:
+            continue
+        if col in {numeric_date_col, numeric_start_date_col, numeric_end_date_col}:
+            continue
+        if col in {"OT", "Number of Sites Reporting"}:
+            agg_map[col] = "mean"
+        else:
+            agg_map[col] = _mode_or_na
+
+    weekly = numeric.groupby(group_cols, as_index=False).agg(agg_map)
+    weekly = weekly.rename(
+        columns={
+            "__week_start__": numeric_start_date_col,
+            "__week_end__": numeric_end_date_col,
+        }
+    )
+    weekly[numeric_date_col] = weekly[numeric_start_date_col]
+    return weekly
+
+
 def _read_text_csv(
     path: Path,
     *,
@@ -79,6 +127,7 @@ def _merge_with_interval_overlap(
     numeric_path: Path,
     search_path: Path,
     report_path: Path,
+    numeric_date_col: str,
     numeric_start_date_col: str,
     numeric_end_date_col: str,
     text_start_date_col: str,
@@ -90,6 +139,8 @@ def _merge_with_interval_overlap(
     numeric = numeric.loc[:, ~numeric.columns.str.contains(r"^Unnamed")]
     numeric = _prefer_lowercase_date(numeric)
 
+    if numeric_date_col not in numeric.columns:
+        raise ValueError(f"Missing numeric date column '{numeric_date_col}' in {numeric_path}")
     if numeric_start_date_col not in numeric.columns:
         raise ValueError(
             f"Missing numeric start date column '{numeric_start_date_col}' in {numeric_path}"
@@ -99,8 +150,16 @@ def _merge_with_interval_overlap(
             f"Missing numeric end date column '{numeric_end_date_col}' in {numeric_path}"
         )
 
+    numeric[numeric_date_col] = pd.to_datetime(numeric[numeric_date_col])
     numeric[numeric_start_date_col] = pd.to_datetime(numeric[numeric_start_date_col])
     numeric[numeric_end_date_col] = pd.to_datetime(numeric[numeric_end_date_col])
+
+    numeric = _aggregate_numeric_to_weekly(
+        numeric,
+        numeric_date_col=numeric_date_col,
+        numeric_start_date_col=numeric_start_date_col,
+        numeric_end_date_col=numeric_end_date_col,
+    )
 
     if min_numeric_start_date is not None:
         min_numeric_start_date = pd.to_datetime(min_numeric_start_date)
@@ -204,6 +263,11 @@ def main() -> None:
         help="Start date column in the numeric CSV.",
     )
     parser.add_argument(
+        "--numeric-date-col",
+        default="date",
+        help="Date column in the numeric CSV to aggregate into weeks.",
+    )
+    parser.add_argument(
         "--numeric-end-date-col",
         default="end_date",
         help="End date column in the numeric CSV.",
@@ -230,6 +294,7 @@ def main() -> None:
         numeric_path=Path(args.numeric),
         search_path=Path(args.search),
         report_path=Path(args.report),
+        numeric_date_col=args.numeric_date_col,
         numeric_start_date_col=args.numeric_start_date_col,
         numeric_end_date_col=args.numeric_end_date_col,
         text_start_date_col=args.text_start_date_col,
