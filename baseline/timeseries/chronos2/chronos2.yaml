@@ -23,7 +23,7 @@ economy:
   test_ratio: 0.2
 
 agriculture:
-  data_path: data/source_data/agriculture/Agriculture_with_text.csv
+  data_path: data/source_data/agriculture/raw/Agriculture_with_text.csv
   date_column: date
   numeric_features:
     - Wholesale broiler composite
@@ -33,8 +33,72 @@ agriculture:
   val_ratio: 0.1
   test_ratio: 0.2
 
+climate:
+  data_path: data/source_data/climate/raw/Climate_with_text.csv
+  date_column: date
+  numeric_features:
+    - MapDate
+    - D0
+    - D1
+    - D2
+    - D3
+    - D4
+    - StatisticFormatID
+  target_column: OT
+  train_ratio: 0.7
+  val_ratio: 0.1
+  test_ratio: 0.2
+
+environment:
+  data_path: data/source_data/environment/raw/Environment_with_text.csv
+  date_column: date
+  numeric_features:
+    - CBSA Code
+    - Number of Sites Reporting
+  target_column: OT
+  train_ratio: 0.7
+  val_ratio: 0.1
+  test_ratio: 0.2
+
+health_afr:
+  data_path: data/source_data/health_afr/raw/Health_AFR_with_text.csv
+  date_column: date
+  target_column: OT
+  train_ratio: 0.7
+  val_ratio: 0.1
+  test_ratio: 0.2
+
+health_us:
+  data_path: data/source_data/health_us/raw/Health_US_with_text.csv
+  date_column: date
+  numeric_features:
+    - YEAR
+    - WEEK
+    - "% WEIGHTED ILI"
+    - AGE 0-4
+    - AGE 25-49
+    - AGE 25-64
+    - AGE 5-24
+    - AGE 50-64
+    - AGE 65
+    - ILITOTAL
+    - NUM. OF PROVIDERS
+    - TOTAL PATIENTS
+  target_column: OT
+  train_ratio: 0.7
+  val_ratio: 0.1
+  test_ratio: 0.2
+
+security:
+  data_path: data/source_data/security/raw/Security_with_text.csv
+  date_column: date
+  target_column: OT
+  train_ratio: 0.7
+  val_ratio: 0.1
+  test_ratio: 0.2
+
 social_good:
-  data_path: data/source_data/social_good/SocialGood_with_text.csv
+  data_path: data/source_data/social_good/raw/SocialGood_with_text.csv
   date_column: date
   target_column: OT
   train_ratio: 0.7
@@ -42,7 +106,7 @@ social_good:
   test_ratio: 0.2
 
 traffic:
-  data_path: data/source_data/traffic/Traffic_with_text.csv
+  data_path: data/source_data/traffic/raw/Traffic_with_text.csv
   date_column: date
   target_column: OT
   train_ratio: 0.7

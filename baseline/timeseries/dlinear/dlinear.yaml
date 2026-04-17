@@ -9,7 +9,7 @@ bitcoin:
   target_column: Close
   train_ratio: 0.7
   val_ratio: 0.1
-  test_ratio: 0.12
+  test_ratio: 0.2
 
 economy:
   data_path: data/processed_data/economy/Economy_with_text_summarized_with_embeddings_Qwen_Qwen3-Embedding-4B_lag_3.csv
