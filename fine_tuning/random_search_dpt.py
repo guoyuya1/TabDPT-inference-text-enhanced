@@ -509,7 +509,7 @@ def trial_spec_embedding_lag_count(run_cfg: DataConfig) -> int | None:
     if run_cfg.embedding_columns is not None:
         return _contiguous_lag_count(
             {
-                int(match.group(1))
+                int(match.group(2))
                 for column in run_cfg.embedding_columns
                 if (match := re.fullmatch(r"(.+)_lag(\d+)", column)) is not None
                 and int(match.group(2)) > 0
