@@ -1,0 +1,60 @@
+data_path: data/processed_data_time_features/bitcoin/bitcoin_gpt_analyzed_concise_text_lag_7_numeric_lag3.csv
+date_column: Date
+numeric_features:
+- Open_lag1
+- Open_lag2
+- Open_lag3
+- High_lag1
+- High_lag2
+- High_lag3
+- Low_lag1
+- Low_lag2
+- Low_lag3
+- Close_lag1
+- Close_lag2
+- Close_lag3
+- Adj_Close_lag1
+- Adj_Close_lag2
+- Adj_Close_lag3
+- time_cal_feat_000
+- time_cal_feat_001
+- time_cal_feat_002
+- time_cal_feat_003
+- time_cal_feat_004
+- time_cal_feat_005
+- time_cal_feat_006
+- time_cal_feat_007
+- time_cal_feat_008
+target_column: Adj_Close
+embedding_lags: []
+embedding_columns:
+- embedding_summary_gpt-5.2_lag1
+- embedding_summary_gpt-5.2_lag2
+- embedding_summary_gpt-5.2_lag3
+embedding_column_template: null
+seed: 0
+prediction_window: 6
+max_rows: 800
+context_ratio: 0.2
+train_ratio: 0.5
+val_ratio: 0.1
+test_ratio: 0.2
+model:
+  device: auto
+  model_weight_path: null
+  text_attn_layers: [1,16]
+  use_flash: true
+  compile_model: true
+tuning:
+  epochs: 30
+  gate_lr: 0.1
+  text_attn_lr: 0.01
+  gate_logit_clamp: 10.0
+  tune_batch_size: 256
+  max_context: 1000
+  debug_text_effect: true
+  log_text_mixing_params: true
+  step_log_every: 50
+  early_stopping_patience: 5
+  log_text_score_stats: true
+  text_score_sample_size: 8

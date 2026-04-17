@@ -2,8 +2,8 @@ base_config: ../bitcoin_v2_analyzed_concise.yaml
 base_dataset: null
 trials: 50
 seed: 0
-max_parallel_trials: 8
-gpu_ids: [0, 1]
+max_parallel_trials: 2
+gpu_ids: [0]
 top_k: 50
 search_space:
   text_attn_layers:

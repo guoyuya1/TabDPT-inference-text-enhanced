@@ -8,23 +8,6 @@ agriculture:
     - Retail-wholesale spread for broiler composite_lag1
     - Retail-wholesale spread for broiler composite_lag2
     - Retail-wholesale spread for broiler composite_lag3
-    - time_cal_feat_000
-    - time_cal_feat_001
-    - time_cal_feat_002
-    - time_cal_feat_003
-    - time_cal_feat_004
-    - time_cal_feat_005
-    - time_cal_feat_006
-    - time_cal_feat_007
-    - time_cal_feat_008
-    - time_cal_feat_009
-    - time_cal_feat_010
-    - time_cal_feat_011
-    - time_cal_feat_012
-    - time_cal_feat_013
-    - time_cal_feat_014
-    - time_cal_feat_015
-    - time_cal_feat_016
   target_column: OT
   seed: 0
   prediction_window: 6
@@ -53,15 +36,6 @@ bitcoin:
     - Adj_Close_lag1
     - Adj_Close_lag2
     - Adj_Close_lag3
-    - time_cal_feat_000
-    - time_cal_feat_001
-    - time_cal_feat_002
-    - time_cal_feat_003
-    - time_cal_feat_004
-    - time_cal_feat_005
-    - time_cal_feat_006
-    - time_cal_feat_007
-    - time_cal_feat_008
   target_column: Adj_Close
   seed: 0
   prediction_window: 6
@@ -97,23 +71,6 @@ climate:
     - StatisticFormatID_lag1
     - StatisticFormatID_lag2
     - StatisticFormatID_lag3
-    - time_cal_feat_000
-    - time_cal_feat_001
-    - time_cal_feat_002
-    - time_cal_feat_003
-    - time_cal_feat_004
-    - time_cal_feat_005
-    - time_cal_feat_006
-    - time_cal_feat_007
-    - time_cal_feat_008
-    - time_cal_feat_009
-    - time_cal_feat_010
-    - time_cal_feat_011
-    - time_cal_feat_012
-    - time_cal_feat_013
-    - time_cal_feat_014
-    - time_cal_feat_015
-    - time_cal_feat_016
   target_column: OT
   seed: 0
   prediction_window: 6
@@ -122,6 +79,7 @@ climate:
   val_ratio: 0.1
   test_ratio: 0.2
   max_context: 2000
+
 
 economy:
   data_path: data/processed_data_time_features/economy/economy_v3_gpt_summarized.csv
@@ -136,23 +94,6 @@ economy:
     - OT_lag1
     - OT_lag2
     - OT_lag3
-    - time_cal_feat_000
-    - time_cal_feat_001
-    - time_cal_feat_002
-    - time_cal_feat_003
-    - time_cal_feat_004
-    - time_cal_feat_005
-    - time_cal_feat_006
-    - time_cal_feat_007
-    - time_cal_feat_008
-    - time_cal_feat_009
-    - time_cal_feat_010
-    - time_cal_feat_011
-    - time_cal_feat_012
-    - time_cal_feat_013
-    - time_cal_feat_014
-    - time_cal_feat_015
-    - time_cal_feat_016
   target_column: OT
   seed: 0
   prediction_window: 6
@@ -193,21 +134,6 @@ energy:
     - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag1
     - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag2
     - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag3
-    - time_cal_feat_000
-    - time_cal_feat_001
-    - time_cal_feat_002
-    - time_cal_feat_003
-    - time_cal_feat_004
-    - time_cal_feat_005
-    - time_cal_feat_006
-    - time_cal_feat_007
-    - time_cal_feat_008
-    - time_cal_feat_009
-    - time_cal_feat_010
-    - time_cal_feat_011
-    - time_cal_feat_012
-    - time_cal_feat_013
-    - time_cal_feat_014
   target_column: OT
   seed: 0
   prediction_window: 6
@@ -227,23 +153,6 @@ environment:
     - Number of Sites Reporting_lag1
     - Number of Sites Reporting_lag2
     - Number of Sites Reporting_lag3
-    - time_cal_feat_000
-    - time_cal_feat_001
-    - time_cal_feat_002
-    - time_cal_feat_003
-    - time_cal_feat_004
-    - time_cal_feat_005
-    - time_cal_feat_006
-    - time_cal_feat_007
-    - time_cal_feat_008
-    - time_cal_feat_009
-    - time_cal_feat_010
-    - time_cal_feat_011
-    - time_cal_feat_012
-    - time_cal_feat_013
-    - time_cal_feat_014
-    - time_cal_feat_015
-    - time_cal_feat_016
   target_column: OT
   seed: 0
   prediction_window: 6
@@ -284,23 +193,6 @@ health_us:
     - TOTAL PATIENTS_lag1
     - TOTAL PATIENTS_lag2
     - TOTAL PATIENTS_lag3
-    - time_cal_feat_000
-    - time_cal_feat_001
-    - time_cal_feat_002
-    - time_cal_feat_003
-    - time_cal_feat_004
-    - time_cal_feat_005
-    - time_cal_feat_006
-    - time_cal_feat_007
-    - time_cal_feat_008
-    - time_cal_feat_009
-    - time_cal_feat_010
-    - time_cal_feat_011
-    - time_cal_feat_012
-    - time_cal_feat_013
-    - time_cal_feat_014
-    - time_cal_feat_015
-    - time_cal_feat_016
   target_column: OT
   seed: 0
   prediction_window: 6
@@ -317,23 +209,6 @@ security:
     - OT_lag1
     - OT_lag2
     - OT_lag3
-    - time_cal_feat_000
-    - time_cal_feat_001
-    - time_cal_feat_002
-    - time_cal_feat_003
-    - time_cal_feat_004
-    - time_cal_feat_005
-    - time_cal_feat_006
-    - time_cal_feat_007
-    - time_cal_feat_008
-    - time_cal_feat_009
-    - time_cal_feat_010
-    - time_cal_feat_011
-    - time_cal_feat_012
-    - time_cal_feat_013
-    - time_cal_feat_014
-    - time_cal_feat_015
-    - time_cal_feat_016
   target_column: OT
   seed: 0
   prediction_window: 6
@@ -350,23 +225,6 @@ social_good:
     - OT_lag1
     - OT_lag2
     - OT_lag3
-    - time_cal_feat_000
-    - time_cal_feat_001
-    - time_cal_feat_002
-    - time_cal_feat_003
-    - time_cal_feat_004
-    - time_cal_feat_005
-    - time_cal_feat_006
-    - time_cal_feat_007
-    - time_cal_feat_008
-    - time_cal_feat_009
-    - time_cal_feat_010
-    - time_cal_feat_011
-    - time_cal_feat_012
-    - time_cal_feat_013
-    - time_cal_feat_014
-    - time_cal_feat_015
-    - time_cal_feat_016
   target_column: OT
   seed: 0
   prediction_window: 6
@@ -383,23 +241,6 @@ traffic:
     - OT_lag1
     - OT_lag2
     - OT_lag3
-    - time_cal_feat_000
-    - time_cal_feat_001
-    - time_cal_feat_002
-    - time_cal_feat_003
-    - time_cal_feat_004
-    - time_cal_feat_005
-    - time_cal_feat_006
-    - time_cal_feat_007
-    - time_cal_feat_008
-    - time_cal_feat_009
-    - time_cal_feat_010
-    - time_cal_feat_011
-    - time_cal_feat_012
-    - time_cal_feat_013
-    - time_cal_feat_014
-    - time_cal_feat_015
-    - time_cal_feat_016
   target_column: OT
   seed: 0
   prediction_window: 6
