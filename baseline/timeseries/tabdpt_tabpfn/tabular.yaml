@@ -1,39 +1,3 @@
-agriculture:
-  data_path: data/processed_data_time_features/agriculture/Agriculture_with_text_with_embeddings_Qwen-Qwen3-Embedding-8B_lag_14.csv
-  date_column: date
-  numeric_features:
-    - Wholesale broiler composite_lag1
-    - Wholesale broiler composite_lag2
-    - Wholesale broiler composite_lag3
-    - Retail-wholesale spread for broiler composite_lag1
-    - Retail-wholesale spread for broiler composite_lag2
-    - Retail-wholesale spread for broiler composite_lag3
-    - time_cal_feat_000
-    - time_cal_feat_001
-    - time_cal_feat_002
-    - time_cal_feat_003
-    - time_cal_feat_004
-    - time_cal_feat_005
-    - time_cal_feat_006
-    - time_cal_feat_007
-    - time_cal_feat_008
-    - time_cal_feat_009
-    - time_cal_feat_010
-    - time_cal_feat_011
-    - time_cal_feat_012
-    - time_cal_feat_013
-    - time_cal_feat_014
-    - time_cal_feat_015
-    - time_cal_feat_016
-  target_column: OT
-  seed: 0
-  prediction_window: 6
-  context_ratio: 0.2
-  train_ratio: 0.5
-  val_ratio: 0.1
-  test_ratio: 0.2
-  max_context: 2000
-
 bitcoin:
   data_path: data/processed_data_time_features/bitcoin/bitcoin_gpt_analyzed_concise_text_lag_7_numeric_lag3.csv
   date_column: Date
@@ -66,6 +30,42 @@ bitcoin:
   seed: 0
   prediction_window: 6
   max_rows: 1000
+  context_ratio: 0.2
+  train_ratio: 0.5
+  val_ratio: 0.1
+  test_ratio: 0.2
+  max_context: 2000
+  
+agriculture:
+  data_path: data/processed_data_time_features/agriculture/Agriculture_with_text_with_embeddings_Qwen-Qwen3-Embedding-8B_lag_14.csv
+  date_column: date
+  numeric_features:
+    - Wholesale broiler composite_lag1
+    - Wholesale broiler composite_lag2
+    - Wholesale broiler composite_lag3
+    - Retail-wholesale spread for broiler composite_lag1
+    - Retail-wholesale spread for broiler composite_lag2
+    - Retail-wholesale spread for broiler composite_lag3
+    - time_cal_feat_000
+    - time_cal_feat_001
+    - time_cal_feat_002
+    - time_cal_feat_003
+    - time_cal_feat_004
+    - time_cal_feat_005
+    - time_cal_feat_006
+    - time_cal_feat_007
+    - time_cal_feat_008
+    - time_cal_feat_009
+    - time_cal_feat_010
+    - time_cal_feat_011
+    - time_cal_feat_012
+    - time_cal_feat_013
+    - time_cal_feat_014
+    - time_cal_feat_015
+    - time_cal_feat_016
+  target_column: OT
+  seed: 0
+  prediction_window: 6
   context_ratio: 0.2
   train_ratio: 0.5
   val_ratio: 0.1
