@@ -7,7 +7,7 @@ text_columns:
 numerical_columns:
   - YEAR
   - WEEK
-  - % WEIGHTED ILI
+  - "% WEIGHTED ILI"
   - OT
   - AGE 0-4
   - AGE 25-49

@@ -72,7 +72,7 @@ def generate_seasonality_features(target_values, k: int, L: int = None):
     ts_features = []
     for period in top_k_periods:
         if period is None:
-            ts_features += [None] * 2
+            ts_features += [np.nan, np.nan]
             continue
 
         ts_features.append(np.sin(2 * np.pi / period))
@@ -99,9 +99,9 @@ def generate_seasonality_features(target_values, k: int, L: int = None):
 
     # Append NaNs if top_k_periods has less than k periods
     while len(ts_features) < 2 * k:
-        ts_features.append(None)
+        ts_features.append(np.nan)
 
-    return np.tile(ts_features, (len(target_values), 1))
+    return np.tile(np.asarray(ts_features, dtype=float), (len(target_values), 1))
 
 
 def generate_calendar_features(time_stamp, frequency):
@@ -138,11 +138,13 @@ def generate_calendar_features(time_stamp, frequency):
     ts_features = []
 
     
+    dt_attr = {"hour_of_day": "hour"}
     for feature_name, seasonality in calendar_features:
         if feature_name == "weekofyear":
             feature = time_stamp.dt.isocalendar().week
         else:
-            feature = getattr(time_stamp.dt, f"{feature_name}")
+            attr = dt_attr.get(feature_name, feature_name)
+            feature = getattr(time_stamp.dt, attr)
         ts_features.append(np.sin(2 * np.pi * feature / seasonality))
         ts_features.append(np.cos(2 * np.pi * feature / seasonality))
 
