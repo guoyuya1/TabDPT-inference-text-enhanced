@@ -67,13 +67,14 @@ for dataset_name, cfg in all_cfgs.items():
     n_rows = len(df)
     train_end = int(n_rows * float(cfg.get("train_ratio") or 0.0))
     val_end = train_end + int(n_rows * float(cfg.get("val_ratio") or 0.0))
+    prediction_window = 6
     if not val_end and cfg.get("fit_rows") is not None:
         val_end = int(cfg["fit_rows"])
         train_end = val_end
 
     zero_shot_predictor = TimeSeriesPredictor(
         target=target_column,
-        prediction_length=1,
+        prediction_length=prediction_window,
     )
     zero_shot_predictor.fit(
         TimeSeriesDataFrame.from_data_frame(
@@ -92,9 +93,14 @@ for dataset_name, cfg in all_cfgs.items():
             hist_df, id_column="item_id", timestamp_column=date_column
         )
         fcst = zero_shot_predictor.predict(hist_ts, model="Chronos2")
-        y_pred = fcst["mean"].iloc[-1]
-        y_true = df.loc[i, target_column]
-        zero_shot_preds.append({"index": i, "date": df.loc[i, date_column], "y_true": y_true, "y_pred": y_pred})
+        available_horizon = min(prediction_window, len(df) - i)
+        for horizon_offset in range(available_horizon):
+            target_idx = i + horizon_offset
+            y_pred = fcst["mean"].iloc[horizon_offset]
+            y_true = df.loc[target_idx, target_column]
+            zero_shot_preds.append(
+                {"index": target_idx, "date": df.loc[target_idx, date_column], "y_true": y_true, "y_pred": y_pred}
+            )
 
     zero_shot_preds_df = pd.DataFrame(zero_shot_preds)
     zero_shot_err = zero_shot_preds_df["y_true"] - zero_shot_preds_df["y_pred"]
@@ -109,7 +115,7 @@ for dataset_name, cfg in all_cfgs.items():
 
     fine_tuned_predictor = TimeSeriesPredictor(
         target=target_column,
-        prediction_length=1,
+        prediction_length=prediction_window,
     )
     fine_tuned_predictor.fit(
         TimeSeriesDataFrame.from_data_frame(
@@ -135,9 +141,14 @@ for dataset_name, cfg in all_cfgs.items():
             hist_df, id_column="item_id", timestamp_column=date_column
         )
         fcst = fine_tuned_predictor.predict(hist_ts, model="Chronos2")
-        y_pred = fcst["mean"].iloc[-1]
-        y_true = df.loc[i, target_column]
-        fine_tuned_preds.append({"index": i, "date": df.loc[i, date_column], "y_true": y_true, "y_pred": y_pred})
+        available_horizon = min(prediction_window, len(df) - i)
+        for horizon_offset in range(available_horizon):
+            target_idx = i + horizon_offset
+            y_pred = fcst["mean"].iloc[horizon_offset]
+            y_true = df.loc[target_idx, target_column]
+            fine_tuned_preds.append(
+                {"index": target_idx, "date": df.loc[target_idx, date_column], "y_true": y_true, "y_pred": y_pred}
+            )
 
     fine_tuned_preds_df = pd.DataFrame(fine_tuned_preds)
     fine_tuned_err = fine_tuned_preds_df["y_true"] - fine_tuned_preds_df["y_pred"]
