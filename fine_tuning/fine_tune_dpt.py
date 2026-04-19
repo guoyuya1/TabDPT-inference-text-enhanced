@@ -27,6 +27,7 @@ import pandas as pd
 import schedulefree  # type: ignore
 import torch
 from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.preprocessing import StandardScaler
 
 from tabdpt import TabDPTRegressor
 from tabdpt.utils import pad_x
@@ -35,6 +36,7 @@ try:
     from .eval_fine_tune import (
         _build_rolling_train_step,
         _format_metrics,
+        _format_dual_metrics,
         evaluate_rolling,
         evaluate_rolling_pca,
         evaluate_rolling_truncate_text,
@@ -52,6 +54,7 @@ except ImportError:
     from eval_fine_tune import (
         _build_rolling_train_step,
         _format_metrics,
+        _format_dual_metrics,
         evaluate_rolling,
         evaluate_rolling_pca,
         evaluate_rolling_truncate_text,
@@ -68,6 +71,8 @@ except ImportError:
 
 
 TOP_VALIDATION_MAE_MODELS = 3
+MetricTriplet = tuple[float, float, float]
+DualMetricTriplet = tuple[MetricTriplet, MetricTriplet]
 
 
 @dataclass(frozen=True)
@@ -104,10 +109,12 @@ class FineTuneDataSplits:
 class PreparedFineTuneTrial:
     reg: TabDPTRegressor
     splits: FineTuneDataSplits
+    raw_splits: FineTuneDataSplits
     X_context_proc: np.ndarray
     X_train_proc: np.ndarray
     X_val_proc: np.ndarray
     X_test_proc: np.ndarray
+    target_scaler: StandardScaler | None
     prediction_horizon: int
 
 
@@ -117,6 +124,9 @@ class RollingMetrics:
     mae: float
     rmse: float
     mape: float
+    real_mae: float
+    real_rmse: float
+    real_mape: float
 
 
 @dataclass(frozen=True)
@@ -130,8 +140,10 @@ class FineTuneOutcome:
 class HorizonRunResult:
     horizon: int
     best_epoch: int
-    tuned_no_text_test: tuple[float, float, float]
-    tuned_text_test: tuple[float, float, float]
+    tuned_no_text_test_normalized: MetricTriplet
+    tuned_no_text_test_real: MetricTriplet
+    tuned_text_test_normalized: MetricTriplet
+    tuned_text_test_real: MetricTriplet
 
 
 def _clone_state_dict_to_cpu(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
@@ -220,6 +232,71 @@ def preprocess_features(
 def set_random_seeds(seed: int) -> None:
     torch.manual_seed(seed)
     np.random.seed(seed)
+
+
+def _transform_feature_split(
+    scaler: StandardScaler,
+    X: np.ndarray,
+) -> np.ndarray:
+    return scaler.transform(X.astype(np.float64, copy=False)).astype(np.float32, copy=False)
+
+
+def _transform_target_split(
+    scaler: StandardScaler,
+    y: np.ndarray,
+) -> np.ndarray:
+    return scaler.transform(y.reshape(-1, 1).astype(np.float64, copy=False)).reshape(-1).astype(np.float32, copy=False)
+
+
+def inverse_transform_targets(
+    y: np.ndarray,
+    target_scaler: StandardScaler | None,
+) -> np.ndarray:
+    if target_scaler is None:
+        return y.astype(np.float32, copy=False)
+    return (
+        target_scaler.inverse_transform(y.reshape(-1, 1).astype(np.float64, copy=False))
+        .reshape(-1)
+        .astype(np.float32, copy=False)
+    )
+
+
+def normalize_fine_tune_splits(
+    splits: FineTuneDataSplits,
+) -> tuple[FineTuneDataSplits, StandardScaler]:
+    if len(splits.X_train) == 0:
+        raise ValueError("Cannot fit feature normalizer on an empty train split.")
+    if len(splits.y_train) == 0:
+        raise ValueError("Cannot fit target normalizer on an empty train split.")
+
+    feature_scaler = StandardScaler()
+    feature_scaler.fit(splits.X_train.astype(np.float64, copy=False))
+
+    target_scaler = StandardScaler()
+    target_scaler.fit(splits.y_train.reshape(-1, 1).astype(np.float64, copy=False))
+
+    normalized_splits = FineTuneDataSplits(
+        X_context=_transform_feature_split(feature_scaler, splits.X_context),
+        y_context=_transform_target_split(target_scaler, splits.y_context),
+        text_context=splits.text_context,
+        X_train=_transform_feature_split(feature_scaler, splits.X_train),
+        y_train=_transform_target_split(target_scaler, splits.y_train),
+        text_train=splits.text_train,
+        X_val=_transform_feature_split(feature_scaler, splits.X_val),
+        y_val=_transform_target_split(target_scaler, splits.y_val),
+        text_val=splits.text_val,
+        X_test=_transform_feature_split(feature_scaler, splits.X_test),
+        y_test=_transform_target_split(target_scaler, splits.y_test),
+        text_test=splits.text_test,
+        ts_context=splits.ts_context,
+        ts_train=splits.ts_train,
+        ts_val=splits.ts_val,
+        ts_test=splits.ts_test,
+        calendar_frequency=splits.calendar_frequency,
+        seasonality_k=splits.seasonality_k,
+        seasonality_L=splits.seasonality_L,
+    )
+    return normalized_splits, target_scaler
 
 
 def load_fine_tune_arrays(
@@ -425,7 +502,8 @@ def prepare_fine_tune_trial(
 ) -> PreparedFineTuneTrial:
     if data_splits is None:
         data_splits = load_and_split_fine_tune_data(run_cfg)
-    selected_splits = select_fine_tune_splits_for_horizon(data_splits, horizon=horizon)
+    raw_selected_splits = select_fine_tune_splits_for_horizon(data_splits, horizon=horizon)
+    selected_splits, target_scaler = normalize_fine_tune_splits(raw_selected_splits)
 
     reg = load_tabdpt_regressor(
         device=run_cfg.model.device,
@@ -441,6 +519,7 @@ def prepare_fine_tune_trial(
     return PreparedFineTuneTrial(
         reg=reg,
         splits=selected_splits,
+        raw_splits=raw_selected_splits,
         X_context_proc=preprocess_features(
             reg,
             selected_splits.X_context,
@@ -465,6 +544,7 @@ def prepare_fine_tune_trial(
             reduction_mode=reduction_mode,
             reduction_payload=reduction_payload,
         ),
+        target_scaler=target_scaler,
         prediction_horizon=horizon,
     )
 
@@ -473,8 +553,9 @@ def _prepared_eval_inputs(
     prepared_trial: PreparedFineTuneTrial,
     *,
     split_name: str,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     splits = prepared_trial.splits
+    raw_splits = prepared_trial.raw_splits
     trim = max(0, prepared_trial.prediction_horizon - 1)
 
     def _trim_history_tail(
@@ -495,6 +576,7 @@ def _prepared_eval_inputs(
             splits.text_context,
             prepared_trial.X_train_proc,
             splits.y_train,
+            raw_splits.y_train,
             splits.text_train,
         )
     if split_name == "val":
@@ -509,6 +591,7 @@ def _prepared_eval_inputs(
             text_hist,
             prepared_trial.X_val_proc,
             splits.y_val,
+            raw_splits.y_val,
             splits.text_val,
         )
     if split_name == "test":
@@ -523,6 +606,7 @@ def _prepared_eval_inputs(
             text_hist,
             prepared_trial.X_test_proc,
             splits.y_test,
+            raw_splits.y_test,
             splits.text_test,
         )
     raise ValueError(f"Unsupported split_name: {split_name!r}. Expected 'train', 'val', or 'test'.")
@@ -542,7 +626,7 @@ def evaluate_fresh_baseline_metric(
     split_name: str,
     baseline_kind: str,
     label: str,
-) -> tuple[float, float, float] | tuple[tuple[float, float, float], str] | None:
+) -> DualMetricTriplet | tuple[DualMetricTriplet, str] | None:
     _reset_compiler_state()
     prepared_trial = prepare_fine_tune_trial(
         run_cfg,
@@ -550,7 +634,7 @@ def evaluate_fresh_baseline_metric(
         horizon=horizon,
         pure_tabdpt=baseline_kind != "with_text",
     )
-    X_context_proc, y_context, text_context, X_eval_proc, y_eval, text_eval = _prepared_eval_inputs(
+    X_context_proc, y_context, text_context, X_eval_proc, y_eval, y_eval_real, text_eval = _prepared_eval_inputs(
         prepared_trial,
         split_name=split_name,
     )
@@ -563,10 +647,12 @@ def evaluate_fresh_baseline_metric(
             text_context=text_context,
             X_eval_proc=X_eval_proc,
             y_eval=y_eval,
+            y_eval_real=y_eval_real,
             text_eval=text_eval,
             use_text=False,
             label=label,
             max_context=run_cfg.tuning.max_context,
+            target_scaler=prepared_trial.target_scaler,
             horizon=horizon,
         )
     if baseline_kind == "with_text":
@@ -577,10 +663,12 @@ def evaluate_fresh_baseline_metric(
             text_context=text_context,
             X_eval_proc=X_eval_proc,
             y_eval=y_eval,
+            y_eval_real=y_eval_real,
             text_eval=text_eval,
             use_text=True,
             label=label,
             max_context=run_cfg.tuning.max_context,
+            target_scaler=prepared_trial.target_scaler,
             horizon=horizon,
         )
     if baseline_kind == "pca":
@@ -591,9 +679,11 @@ def evaluate_fresh_baseline_metric(
             text_context=text_context,
             X_eval_proc=X_eval_proc,
             y_eval=y_eval,
+            y_eval_real=y_eval_real,
             text_eval=text_eval,
             label=label,
             max_context=run_cfg.tuning.max_context,
+            target_scaler=prepared_trial.target_scaler,
             horizon=horizon,
         )
     if baseline_kind == "truncate_text":
@@ -604,9 +694,11 @@ def evaluate_fresh_baseline_metric(
             text_context=text_context,
             X_eval_proc=X_eval_proc,
             y_eval=y_eval,
+            y_eval_real=y_eval_real,
             text_eval=text_eval,
             label=label,
             max_context=run_cfg.tuning.max_context,
+            target_scaler=prepared_trial.target_scaler,
             horizon=horizon,
         )
     raise ValueError(
@@ -959,12 +1051,14 @@ def _evaluate_rolling_loss_and_mae(
     text_context: np.ndarray | None,
     X_eval_proc: np.ndarray,
     y_eval: np.ndarray,
+    y_eval_real: np.ndarray,
     text_eval: np.ndarray | None,
     use_text: bool,
     max_context: int | None,
     loss_type: str,
+    target_scaler: StandardScaler | None,
     horizon: int = 1,
-) -> tuple[float, float, float, float]:
+) -> tuple[float, float, float, float, float, float, float]:
     """Run rolling evaluation and return average normalized loss plus metrics."""
     if use_text and (text_context is None or text_eval is None):
         raise ValueError("Rolling eval with text requires context and eval text arrays.")
@@ -1031,8 +1125,14 @@ def _evaluate_rolling_loss_and_mae(
     mae = mean_absolute_error(y_eval, preds)
     denom = np.clip(np.abs(y_eval), 1e-8, None)
     mape = float(np.mean(np.abs((y_eval - preds) / denom)) * 100.0)
+    real_preds = inverse_transform_targets(preds, target_scaler)
+    real_mse = mean_squared_error(y_eval_real, real_preds)
+    real_rmse = float(np.sqrt(real_mse))
+    real_mae = mean_absolute_error(y_eval_real, real_preds)
+    real_denom = np.clip(np.abs(y_eval_real), 1e-8, None)
+    real_mape = float(np.mean(np.abs((y_eval_real - real_preds) / real_denom)) * 100.0)
     avg_loss = loss_sum / len(y_eval)
-    return avg_loss, mae, rmse, mape
+    return avg_loss, mae, rmse, mape, real_mae, real_rmse, real_mape
 
 
 def evaluate_prepared_split(
@@ -1042,38 +1142,56 @@ def evaluate_prepared_split(
     use_text: bool,
     tuning_cfg: TuningConfig,
 ) -> RollingMetrics:
-    X_context_proc, y_context, text_context, X_eval_proc, y_eval, text_eval = _prepared_eval_inputs(
+    X_context_proc, y_context, text_context, X_eval_proc, y_eval, y_eval_real, text_eval = _prepared_eval_inputs(
         prepared_trial,
         split_name=split_name,
     )
-    loss, mae, rmse, mape = _evaluate_rolling_loss_and_mae(
+    loss, mae, rmse, mape, real_mae, real_rmse, real_mape = _evaluate_rolling_loss_and_mae(
         prepared_trial.reg,
         X_context_proc=X_context_proc,
         y_context=y_context,
         text_context=text_context,
         X_eval_proc=X_eval_proc,
         y_eval=y_eval,
+        y_eval_real=y_eval_real,
         text_eval=text_eval,
         use_text=use_text,
         max_context=tuning_cfg.max_context,
         loss_type=tuning_cfg.loss_type,
+        target_scaler=prepared_trial.target_scaler,
         horizon=prepared_trial.prediction_horizon,
     )
-    return RollingMetrics(loss=loss, mae=mae, rmse=rmse, mape=mape)
+    return RollingMetrics(
+        loss=loss,
+        mae=mae,
+        rmse=rmse,
+        mape=mape,
+        real_mae=real_mae,
+        real_rmse=real_rmse,
+        real_mape=real_mape,
+    )
 
 
 def _print_epoch_section(
     *,
     epoch: int,
-    train_loss: float,
-    train_mae: float,
-    val_loss: float,
-    val_mae: float,
+    train_metrics: RollingMetrics,
+    val_metrics: RollingMetrics,
     param_stats: str,
 ) -> None:
     print(f"\n== Epoch {epoch:02d} ==")
-    print(f"Train  | Loss: {train_loss:.4f} | MAE: {train_mae:.4f}")
-    print(f"Val    | Loss: {val_loss:.4f} | MAE: {val_mae:.4f}")
+    print(f"Train  | Loss [normalized]: {train_metrics.loss:.4f}")
+    _format_dual_metrics(
+        "Train",
+        (train_metrics.mae, train_metrics.rmse, train_metrics.mape),
+        (train_metrics.real_mae, train_metrics.real_rmse, train_metrics.real_mape),
+    )
+    print(f"Val    | Loss [normalized]: {val_metrics.loss:.4f}")
+    _format_dual_metrics(
+        "Val",
+        (val_metrics.mae, val_metrics.rmse, val_metrics.mape),
+        (val_metrics.real_mae, val_metrics.real_rmse, val_metrics.real_mape),
+    )
     print(f"Params | {param_stats}")
 
 
@@ -1090,11 +1208,14 @@ def fine_tune_prepared_trial(
         text_context=splits.text_context,
         X_train_proc=prepared_trial.X_train_proc,
         y_train=splits.y_train,
+        y_train_real=prepared_trial.raw_splits.y_train,
         text_train=splits.text_train,
         tuning_cfg=tuning_cfg,
         X_val_proc=prepared_trial.X_val_proc,
         y_val=splits.y_val,
+        y_val_real=prepared_trial.raw_splits.y_val,
         text_val=splits.text_val,
+        target_scaler=prepared_trial.target_scaler,
         prediction_horizon=prepared_trial.prediction_horizon,
     )
 
@@ -1107,11 +1228,14 @@ def fine_tune_external_gate(
     text_context: np.ndarray,
     X_train_proc: np.ndarray,
     y_train: np.ndarray,
+    y_train_real: np.ndarray,
     text_train: np.ndarray,
     tuning_cfg: TuningConfig,
     X_val_proc: np.ndarray,
     y_val: np.ndarray,
+    y_val_real: np.ndarray,
     text_val: np.ndarray,
+    target_scaler: StandardScaler | None,
     prediction_horizon: int = 1,
 ) -> FineTuneOutcome:
     """
@@ -1232,39 +1356,59 @@ def fine_tune_external_gate(
                         gate.clamp_(-tuning_cfg.gate_logit_clamp, tuning_cfg.gate_logit_clamp)
 
         _set_text_attn_dropout_mode(reg, enabled=False)
-        train_loss, train_mae, _, _ = _evaluate_rolling_loss_and_mae(
+        train_loss, train_mae, train_rmse, train_mape, train_real_mae, train_real_rmse, train_real_mape = _evaluate_rolling_loss_and_mae(
             reg,
             X_context_proc=X_context_proc,
             y_context=y_context,
             text_context=text_context,
             X_eval_proc=X_train_proc,
             y_eval=y_train,
+            y_eval_real=y_train_real,
             text_eval=text_train,
             use_text=True,
             max_context=tuning_cfg.max_context,
             loss_type=tuning_cfg.loss_type,
+            target_scaler=target_scaler,
             horizon=prediction_horizon,
         )
-        val_loss, val_mae, val_rmse, val_mape = _evaluate_rolling_loss_and_mae(
+        val_loss, val_mae, val_rmse, val_mape, val_real_mae, val_real_rmse, val_real_mape = _evaluate_rolling_loss_and_mae(
             reg,
             X_context_proc=val_context_proc,
             y_context=val_y_context,
             text_context=val_text_context,
             X_eval_proc=X_val_proc,
             y_eval=y_val,
+            y_eval_real=y_val_real,
             text_eval=text_val,
             use_text=True,
             max_context=tuning_cfg.max_context,
             loss_type=tuning_cfg.loss_type,
+            target_scaler=target_scaler,
             horizon=prediction_horizon,
         )
         param_stats = get_trainining_info(reg)
+        train_metrics = RollingMetrics(
+            loss=train_loss,
+            mae=train_mae,
+            rmse=train_rmse,
+            mape=train_mape,
+            real_mae=train_real_mae,
+            real_rmse=train_real_rmse,
+            real_mape=train_real_mape,
+        )
+        val_metrics = RollingMetrics(
+            loss=val_loss,
+            mae=val_mae,
+            rmse=val_rmse,
+            mape=val_mape,
+            real_mae=val_real_mae,
+            real_rmse=val_real_rmse,
+            real_mape=val_real_mape,
+        )
         _print_epoch_section(
             epoch=epoch,
-            train_loss=train_loss,
-            train_mae=train_mae,
-            val_loss=val_loss,
-            val_mae=val_mae,
+            train_metrics=train_metrics,
+            val_metrics=val_metrics,
             param_stats=param_stats,
         )
         _maybe_record_top_validation_mae_checkpoint(
@@ -1414,10 +1558,12 @@ def _run_single_horizon(
     text_val = splits.text_val
     y_test = splits.y_test
     text_test = splits.text_test
+    y_train_real = prepared_trial.raw_splits.y_train
+    y_test_real = prepared_trial.raw_splits.y_test
     if run_cfg.tuning.debug_text_effect:
-        delta_mae = baseline_text_val[0] - baseline_no_text_val[0]
-        delta_rmse = baseline_text_val[1] - baseline_no_text_val[1]
-        delta_mape = baseline_text_val[2] - baseline_no_text_val[2]
+        delta_mae = baseline_text_val[0][0] - baseline_no_text_val[0][0]
+        delta_rmse = baseline_text_val[0][1] - baseline_no_text_val[0][1]
+        delta_mape = baseline_text_val[0][2] - baseline_no_text_val[0][2]
         print(
             f"Val text effect | ΔMAE={delta_mae:.6f} | "
             f"ΔRMSE={delta_rmse:.6f} | ΔMAPE={delta_mape:.6f}%"
@@ -1433,10 +1579,10 @@ def _run_single_horizon(
     )
 
     print("\n== After tuning ==")
-    _format_metrics("Train (no text attn)", *baseline_no_text_train)
-    _format_metrics("Train (PCA)", *baseline_pca_train)
+    _format_dual_metrics("Train (no text attn)", *baseline_no_text_train)
+    _format_dual_metrics("Train (PCA)", *baseline_pca_train)
     if baseline_truncate_train is not None:
-        _format_metrics(baseline_truncate_train[1], *baseline_truncate_train[0])
+        _format_dual_metrics(baseline_truncate_train[1], *baseline_truncate_train[0])
     evaluate_rolling(
         reg,
         X_context_proc=X_context_proc,
@@ -1444,10 +1590,12 @@ def _run_single_horizon(
         text_context=text_context,
         X_eval_proc=X_train_proc,
         y_eval=y_train,
+        y_eval_real=y_train_real,
         text_eval=text_train,
         use_text=True,
         label="Train (with text attn)",
         max_context=run_cfg.tuning.max_context,
+        target_scaler=prepared_trial.target_scaler,
         horizon=horizon,
     )
 
@@ -1461,10 +1609,12 @@ def _run_single_horizon(
         text_context=test_text_context,
         X_eval_proc=X_test_proc,
         y_eval=y_test,
+        y_eval_real=y_test_real,
         text_eval=text_test,
         use_text=False,
         label="Test (no text attn)",
         max_context=run_cfg.tuning.max_context,
+        target_scaler=prepared_trial.target_scaler,
         horizon=horizon,
     )
     evaluate_rolling_pca(
@@ -1474,9 +1624,11 @@ def _run_single_horizon(
         text_context=test_text_context,
         X_eval_proc=X_test_proc,
         y_eval=y_test,
+        y_eval_real=y_test_real,
         text_eval=text_test,
         label="Test (PCA)",
         max_context=run_cfg.tuning.max_context,
+        target_scaler=prepared_trial.target_scaler,
         horizon=horizon,
     )
     evaluate_rolling_truncate_text(
@@ -1486,9 +1638,11 @@ def _run_single_horizon(
         text_context=test_text_context,
         X_eval_proc=X_test_proc,
         y_eval=y_test,
+        y_eval_real=y_test_real,
         text_eval=text_test,
         label="Test (text truncate)",
         max_context=run_cfg.tuning.max_context,
+        target_scaler=prepared_trial.target_scaler,
         horizon=horizon,
     )
     tuned_text_test = evaluate_rolling(
@@ -1498,16 +1652,18 @@ def _run_single_horizon(
         text_context=test_text_context,
         X_eval_proc=X_test_proc,
         y_eval=y_test,
+        y_eval_real=y_test_real,
         text_eval=text_test,
         use_text=True,
         label="Test (with text attn)",
         max_context=run_cfg.tuning.max_context,
+        target_scaler=prepared_trial.target_scaler,
         horizon=horizon,
     )
     if run_cfg.tuning.debug_text_effect:
-        delta_mae = tuned_text_test[0] - tuned_no_text_test[0]
-        delta_rmse = tuned_text_test[1] - tuned_no_text_test[1]
-        delta_mape = tuned_text_test[2] - tuned_no_text_test[2]
+        delta_mae = tuned_text_test[0][0] - tuned_no_text_test[0][0]
+        delta_rmse = tuned_text_test[0][1] - tuned_no_text_test[0][1]
+        delta_mape = tuned_text_test[0][2] - tuned_no_text_test[0][2]
         print(
             f"Test text effect | ΔMAE={delta_mae:.6f} | "
             f"ΔRMSE={delta_rmse:.6f} | ΔMAPE={delta_mape:.6f}%"
@@ -1531,10 +1687,12 @@ def _run_single_horizon(
             text_context=test_text_context,
             X_eval_proc=X_test_proc,
             y_eval=y_test,
+            y_eval_real=y_test_real,
             text_eval=text_test,
             use_text=True,
             label=f"Test top {rank} (with text attn)",
             max_context=run_cfg.tuning.max_context,
+            target_scaler=prepared_trial.target_scaler,
             horizon=horizon,
         )
     reg.model.load_state_dict(restored_best_state_dict)
@@ -1542,8 +1700,10 @@ def _run_single_horizon(
     return HorizonRunResult(
         horizon=horizon,
         best_epoch=fine_tune_outcome.best_epoch,
-        tuned_no_text_test=tuned_no_text_test,
-        tuned_text_test=tuned_text_test,
+        tuned_no_text_test_normalized=tuned_no_text_test[0],
+        tuned_no_text_test_real=tuned_no_text_test[1],
+        tuned_text_test_normalized=tuned_text_test[0],
+        tuned_text_test_real=tuned_text_test[1],
     )
 
 
@@ -1578,13 +1738,15 @@ def main() -> None:
 
     if len(horizon_results) > 1:
         print("\n================ Mean Summary Across Horizons ================")
-        _format_metrics(
+        _format_dual_metrics(
             "Mean test (no text attn)",
-            *_mean_metric_triplets([result.tuned_no_text_test for result in horizon_results]),
+            _mean_metric_triplets([result.tuned_no_text_test_normalized for result in horizon_results]),
+            _mean_metric_triplets([result.tuned_no_text_test_real for result in horizon_results]),
         )
-        _format_metrics(
+        _format_dual_metrics(
             "Mean test (with text attn)",
-            *_mean_metric_triplets([result.tuned_text_test for result in horizon_results]),
+            _mean_metric_triplets([result.tuned_text_test_normalized for result in horizon_results]),
+            _mean_metric_triplets([result.tuned_text_test_real for result in horizon_results]),
         )
         print(
             "Best epochs by horizon: "

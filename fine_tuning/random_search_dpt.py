@@ -89,6 +89,9 @@ class RandomSearchTrialResult:
     val_mae: float
     val_rmse: float
     val_mape: float
+    val_real_mae: float
+    val_real_rmse: float
+    val_real_mape: float
     ranking_score: float
     target_lag_count: int | None = None
     embedding_lag_count: int | None = None
@@ -97,6 +100,9 @@ class RandomSearchTrialResult:
     test_mae: float | None = None
     test_rmse: float | None = None
     test_mape: float | None = None
+    test_real_mae: float | None = None
+    test_real_rmse: float | None = None
+    test_real_mape: float | None = None
     horizon_metrics: list["HorizonTrialMetrics"] | None = None
 
 
@@ -108,10 +114,16 @@ class HorizonTrialMetrics:
     val_mae: float
     val_rmse: float
     val_mape: float
+    val_real_mae: float
+    val_real_rmse: float
+    val_real_mape: float
     test_loss: float | None = None
     test_mae: float | None = None
     test_rmse: float | None = None
     test_mape: float | None = None
+    test_real_mae: float | None = None
+    test_real_rmse: float | None = None
+    test_real_mape: float | None = None
 
 
 @dataclass(frozen=True)
@@ -119,6 +131,9 @@ class SummaryMetrics:
     mae: float
     rmse: float
     mape: float
+    real_mae: float
+    real_rmse: float
+    real_mape: float
 
 
 @dataclass(frozen=True)
@@ -252,8 +267,15 @@ def _top_trial_indices(results: list[RandomSearchTrialResult], *, top_k: int) ->
     return {result.trial_index for result in ranked_results[:top_limit]}
 
 
-def _metrics_from_triplet(metrics: tuple[float, float, float]) -> SummaryMetrics:
-    return SummaryMetrics(mae=metrics[0], rmse=metrics[1], mape=metrics[2])
+def _metrics_from_triplet(metrics: tuple[tuple[float, float, float], tuple[float, float, float]]) -> SummaryMetrics:
+    return SummaryMetrics(
+        mae=metrics[0][0],
+        rmse=metrics[0][1],
+        mape=metrics[0][2],
+        real_mae=metrics[1][0],
+        real_rmse=metrics[1][1],
+        real_mape=metrics[1][2],
+    )
 
 
 def _mean_summary_metrics(metrics_list: list[SummaryMetrics]) -> SummaryMetrics:
@@ -261,6 +283,9 @@ def _mean_summary_metrics(metrics_list: list[SummaryMetrics]) -> SummaryMetrics:
         mae=float(np.mean([metrics.mae for metrics in metrics_list])),
         rmse=float(np.mean([metrics.rmse for metrics in metrics_list])),
         mape=float(np.mean([metrics.mape for metrics in metrics_list])),
+        real_mae=float(np.mean([metrics.real_mae for metrics in metrics_list])),
+        real_rmse=float(np.mean([metrics.real_rmse for metrics in metrics_list])),
+        real_mape=float(np.mean([metrics.real_mape for metrics in metrics_list])),
     )
 
 
@@ -270,6 +295,9 @@ def _mean_rolling_metrics(metrics_list: list[RollingMetrics]) -> RollingMetrics:
         mae=float(np.mean([metrics.mae for metrics in metrics_list])),
         rmse=float(np.mean([metrics.rmse for metrics in metrics_list])),
         mape=float(np.mean([metrics.mape for metrics in metrics_list])),
+        real_mae=float(np.mean([metrics.real_mae for metrics in metrics_list])),
+        real_rmse=float(np.mean([metrics.real_rmse for metrics in metrics_list])),
+        real_mape=float(np.mean([metrics.real_mape for metrics in metrics_list])),
     )
 
 
@@ -525,6 +553,9 @@ def _serialize_summary_metrics(metrics: SummaryMetrics | None, *, label: str | N
         "mae": metrics.mae,
         "rmse": metrics.rmse,
         "mape": metrics.mape,
+        "real_mae": metrics.real_mae,
+        "real_rmse": metrics.real_rmse,
+        "real_mape": metrics.real_mape,
     }
     if label is not None:
         payload["label"] = label
@@ -539,10 +570,16 @@ def _serialize_horizon_trial_metrics(metrics: HorizonTrialMetrics) -> dict[str, 
         "val_mae": metrics.val_mae,
         "val_rmse": metrics.val_rmse,
         "val_mape": metrics.val_mape,
+        "val_real_mae": metrics.val_real_mae,
+        "val_real_rmse": metrics.val_real_rmse,
+        "val_real_mape": metrics.val_real_mape,
         "test_loss": metrics.test_loss,
         "test_mae": metrics.test_mae,
         "test_rmse": metrics.test_rmse,
         "test_mape": metrics.test_mape,
+        "test_real_mae": metrics.test_real_mae,
+        "test_real_rmse": metrics.test_real_rmse,
+        "test_real_mape": metrics.test_real_mape,
     }
 
 
@@ -604,7 +641,10 @@ def _format_summary_metrics_line(prefix: str, metrics: SummaryMetrics) -> str:
     return (
         f"{prefix} | mae={metrics.mae:.6f} | "
         f"rmse={metrics.rmse:.6f} | "
-        f"mape={metrics.mape:.6f}%"
+        f"mape={metrics.mape:.6f}% | "
+        f"real_mae={metrics.real_mae:.6f} | "
+        f"real_rmse={metrics.real_rmse:.6f} | "
+        f"real_mape={metrics.real_mape:.6f}%"
     )
 
 
@@ -626,7 +666,10 @@ def _format_per_horizon_baseline_lines(horizon_result: HorizonBaselineResult) ->
                 f"{prefix} | val_truncate | label={horizon_result.val_truncate_label} | "
                 f"mae={horizon_result.val_truncate.mae:.6f} | "
                 f"rmse={horizon_result.val_truncate.rmse:.6f} | "
-                f"mape={horizon_result.val_truncate.mape:.6f}%"
+                f"mape={horizon_result.val_truncate.mape:.6f}% | "
+                f"real_mae={horizon_result.val_truncate.real_mae:.6f} | "
+                f"real_rmse={horizon_result.val_truncate.real_rmse:.6f} | "
+                f"real_mape={horizon_result.val_truncate.real_mape:.6f}%"
             )
         )
     )
@@ -638,7 +681,10 @@ def _format_per_horizon_baseline_lines(horizon_result: HorizonBaselineResult) ->
                 f"{prefix} | test_truncate | label={horizon_result.test_truncate_label} | "
                 f"mae={horizon_result.test_truncate.mae:.6f} | "
                 f"rmse={horizon_result.test_truncate.rmse:.6f} | "
-                f"mape={horizon_result.test_truncate.mape:.6f}%"
+                f"mape={horizon_result.test_truncate.mape:.6f}% | "
+                f"real_mae={horizon_result.test_truncate.real_mae:.6f} | "
+                f"real_rmse={horizon_result.test_truncate.real_rmse:.6f} | "
+                f"real_mape={horizon_result.test_truncate.real_mape:.6f}%"
             )
         )
     )
@@ -649,8 +695,9 @@ def _baseline_eval_inputs(
     prepared_trial: PreparedFineTuneTrial,
     *,
     split_name: str,
-) -> tuple[Any, Any, Any, Any, Any, Any]:
+) -> tuple[Any, Any, Any, Any, Any, Any, Any]:
     splits = prepared_trial.splits
+    raw_splits = prepared_trial.raw_splits
     if split_name == "val":
         return (
             np.concatenate((prepared_trial.X_context_proc, prepared_trial.X_train_proc)),
@@ -658,6 +705,7 @@ def _baseline_eval_inputs(
             np.concatenate((splits.text_context, splits.text_train), axis=0),
             prepared_trial.X_val_proc,
             splits.y_val,
+            raw_splits.y_val,
             splits.text_val,
         )
     if split_name == "test":
@@ -667,6 +715,7 @@ def _baseline_eval_inputs(
             np.concatenate((splits.text_context, splits.text_train, splits.text_val), axis=0),
             prepared_trial.X_test_proc,
             splits.y_test,
+            raw_splits.y_test,
             splits.text_test,
         )
     raise ValueError(f"Unsupported split_name: {split_name!r}. Expected 'val' or 'test'.")
@@ -709,10 +758,12 @@ def run_shared_baseline_evaluation(
                         text_context=val_inputs[2],
                         X_eval_proc=val_inputs[3],
                         y_eval=val_inputs[4],
-                        text_eval=val_inputs[5],
+                        y_eval_real=val_inputs[5],
+                        text_eval=val_inputs[6],
                         use_text=False,
                         label="Baseline val (no text attn)",
                         max_context=base_run_cfg.tuning.max_context,
+                        target_scaler=prepared_trial.target_scaler,
                         horizon=horizon,
                     )
                 )
@@ -724,10 +775,12 @@ def run_shared_baseline_evaluation(
                         text_context=val_inputs[2],
                         X_eval_proc=val_inputs[3],
                         y_eval=val_inputs[4],
-                        text_eval=val_inputs[5],
+                        y_eval_real=val_inputs[5],
+                        text_eval=val_inputs[6],
                         use_text=True,
                         label="Baseline val (with text attn)",
                         max_context=base_run_cfg.tuning.max_context,
+                        target_scaler=prepared_trial.target_scaler,
                         horizon=horizon,
                     )
                 )
@@ -739,9 +792,11 @@ def run_shared_baseline_evaluation(
                         text_context=val_inputs[2],
                         X_eval_proc=val_inputs[3],
                         y_eval=val_inputs[4],
-                        text_eval=val_inputs[5],
+                        y_eval_real=val_inputs[5],
+                        text_eval=val_inputs[6],
                         label="Baseline val (PCA)",
                         max_context=base_run_cfg.tuning.max_context,
+                        target_scaler=prepared_trial.target_scaler,
                         horizon=horizon,
                     )
                 )
@@ -752,9 +807,11 @@ def run_shared_baseline_evaluation(
                     text_context=val_inputs[2],
                     X_eval_proc=val_inputs[3],
                     y_eval=val_inputs[4],
-                    text_eval=val_inputs[5],
+                    y_eval_real=val_inputs[5],
+                    text_eval=val_inputs[6],
                     label="Baseline val (text truncate)",
                     max_context=base_run_cfg.tuning.max_context,
+                    target_scaler=prepared_trial.target_scaler,
                     horizon=horizon,
                 )
 
@@ -767,10 +824,12 @@ def run_shared_baseline_evaluation(
                         text_context=test_inputs[2],
                         X_eval_proc=test_inputs[3],
                         y_eval=test_inputs[4],
-                        text_eval=test_inputs[5],
+                        y_eval_real=test_inputs[5],
+                        text_eval=test_inputs[6],
                         use_text=False,
                         label="Baseline test (no text attn)",
                         max_context=base_run_cfg.tuning.max_context,
+                        target_scaler=prepared_trial.target_scaler,
                         horizon=horizon,
                     )
                 )
@@ -782,10 +841,12 @@ def run_shared_baseline_evaluation(
                         text_context=test_inputs[2],
                         X_eval_proc=test_inputs[3],
                         y_eval=test_inputs[4],
-                        text_eval=test_inputs[5],
+                        y_eval_real=test_inputs[5],
+                        text_eval=test_inputs[6],
                         use_text=True,
                         label="Baseline test (with text attn)",
                         max_context=base_run_cfg.tuning.max_context,
+                        target_scaler=prepared_trial.target_scaler,
                         horizon=horizon,
                     )
                 )
@@ -797,9 +858,11 @@ def run_shared_baseline_evaluation(
                         text_context=test_inputs[2],
                         X_eval_proc=test_inputs[3],
                         y_eval=test_inputs[4],
-                        text_eval=test_inputs[5],
+                        y_eval_real=test_inputs[5],
+                        text_eval=test_inputs[6],
                         label="Baseline test (PCA)",
                         max_context=base_run_cfg.tuning.max_context,
+                        target_scaler=prepared_trial.target_scaler,
                         horizon=horizon,
                     )
                 )
@@ -810,9 +873,11 @@ def run_shared_baseline_evaluation(
                     text_context=test_inputs[2],
                     X_eval_proc=test_inputs[3],
                     y_eval=test_inputs[4],
-                    text_eval=test_inputs[5],
+                    y_eval_real=test_inputs[5],
+                    text_eval=test_inputs[6],
                     label="Baseline test (text truncate)",
                     max_context=base_run_cfg.tuning.max_context,
+                    target_scaler=prepared_trial.target_scaler,
                     horizon=horizon,
                 )
 
@@ -1079,13 +1144,19 @@ def execute_random_search_trial(
                 val_mae=val_metrics.mae,
                 val_rmse=val_metrics.rmse,
                 val_mape=val_metrics.mape,
+                val_real_mae=val_metrics.real_mae,
+                val_real_rmse=val_metrics.real_rmse,
+                val_real_mape=val_metrics.real_mape,
             )
         )
         checkpoint_bundle[horizon] = _clone_text_mixing_state_dict_to_cpu(prepared_trial.reg.model)
         print(
             f"Horizon {horizon:02d} complete | best_epoch={fine_tune_outcome.best_epoch} | "
             f"val_mae={val_metrics.mae:.6f} | val_rmse={val_metrics.rmse:.6f} | "
-            f"val_mape={val_metrics.mape:.6f}%"
+            f"val_mape={val_metrics.mape:.6f}% | "
+            f"val_real_mae={val_metrics.real_mae:.6f} | "
+            f"val_real_rmse={val_metrics.real_rmse:.6f} | "
+            f"val_real_mape={val_metrics.real_mape:.6f}%"
         )
 
     aggregate_val_metrics = _mean_rolling_metrics(val_metrics_by_horizon)
@@ -1105,6 +1176,9 @@ def execute_random_search_trial(
         val_mae=aggregate_val_metrics.mae,
         val_rmse=aggregate_val_metrics.rmse,
         val_mape=aggregate_val_metrics.mape,
+        val_real_mae=aggregate_val_metrics.real_mae,
+        val_real_rmse=aggregate_val_metrics.real_rmse,
+        val_real_mape=aggregate_val_metrics.real_mape,
         ranking_score=ranking_score,
         best_epoch=(
             horizon_metrics[0].best_epoch
@@ -1116,7 +1190,10 @@ def execute_random_search_trial(
     print(
         f"Trial {trial_index:02d} complete | objective={ranking_score:.6f} | "
         f"val_mae={aggregate_val_metrics.mae:.6f} | val_rmse={aggregate_val_metrics.rmse:.6f} | "
-        f"val_mape={aggregate_val_metrics.mape:.6f}%"
+        f"val_mape={aggregate_val_metrics.mape:.6f}% | "
+        f"val_real_mae={aggregate_val_metrics.real_mae:.6f} | "
+        f"val_real_rmse={aggregate_val_metrics.real_rmse:.6f} | "
+        f"val_real_mape={aggregate_val_metrics.real_mape:.6f}%"
     )
     return result, checkpoint_bundle
 
@@ -1356,11 +1433,17 @@ def _serialize_trial_result(
         "val_mae": result.val_mae,
         "val_rmse": result.val_rmse,
         "val_mape": result.val_mape,
+        "val_real_mae": result.val_real_mae,
+        "val_real_rmse": result.val_real_rmse,
+        "val_real_mape": result.val_real_mape,
         "ranking_score": result.ranking_score,
         "test_loss": result.test_loss,
         "test_mae": result.test_mae,
         "test_rmse": result.test_rmse,
         "test_mape": result.test_mape,
+        "test_real_mae": result.test_real_mae,
+        "test_real_rmse": result.test_real_rmse,
+        "test_real_mape": result.test_real_mape,
     }
 
 
@@ -1386,11 +1469,17 @@ def _write_trial_results_csv(
         "val_mae",
         "val_rmse",
         "val_mape",
+        "val_real_mae",
+        "val_real_rmse",
+        "val_real_mape",
         "ranking_score",
         "test_loss",
         "test_mae",
         "test_rmse",
         "test_mape",
+        "test_real_mae",
+        "test_real_rmse",
+        "test_real_mape",
     ]
     with csv_path.open("w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -1425,7 +1514,10 @@ def _append_test_metrics_to_trial_log(
             "\n== Test Evaluation For Ranked Trial ==\n"
             f"rank={rank} | trial_index={trial_index} | "
             f"test_loss={metrics.loss:.6f} | test_mae={metrics.mae:.6f} | "
-            f"test_rmse={metrics.rmse:.6f} | test_mape={metrics.mape:.6f}%\n"
+            f"test_rmse={metrics.rmse:.6f} | test_mape={metrics.mape:.6f}% | "
+            f"test_real_mae={metrics.real_mae:.6f} | "
+            f"test_real_rmse={metrics.real_rmse:.6f} | "
+            f"test_real_mape={metrics.real_mape:.6f}%\n"
         )
         if horizon_metrics is not None:
             for horizon_metric in horizon_metrics:
@@ -1434,7 +1526,10 @@ def _append_test_metrics_to_trial_log(
                     f"test_loss={horizon_metric.test_loss:.6f} | "
                     f"test_mae={horizon_metric.test_mae:.6f} | "
                     f"test_rmse={horizon_metric.test_rmse:.6f} | "
-                    f"test_mape={horizon_metric.test_mape:.6f}%\n"
+                    f"test_mape={horizon_metric.test_mape:.6f}% | "
+                    f"test_real_mae={horizon_metric.test_real_mae:.6f} | "
+                    f"test_real_rmse={horizon_metric.test_real_rmse:.6f} | "
+                    f"test_real_mape={horizon_metric.test_real_mape:.6f}%\n"
                 )
 
 
@@ -1521,17 +1616,26 @@ def _write_summary_log(
         (
             f"val_no_text | mae={shared_baseline.val_no_text.mae:.6f} | "
             f"rmse={shared_baseline.val_no_text.rmse:.6f} | "
-            f"mape={shared_baseline.val_no_text.mape:.6f}%"
+            f"mape={shared_baseline.val_no_text.mape:.6f}% | "
+            f"real_mae={shared_baseline.val_no_text.real_mae:.6f} | "
+            f"real_rmse={shared_baseline.val_no_text.real_rmse:.6f} | "
+            f"real_mape={shared_baseline.val_no_text.real_mape:.6f}%"
         ),
         (
             f"val_with_text | mae={shared_baseline.val_with_text.mae:.6f} | "
             f"rmse={shared_baseline.val_with_text.rmse:.6f} | "
-            f"mape={shared_baseline.val_with_text.mape:.6f}%"
+            f"mape={shared_baseline.val_with_text.mape:.6f}% | "
+            f"real_mae={shared_baseline.val_with_text.real_mae:.6f} | "
+            f"real_rmse={shared_baseline.val_with_text.real_rmse:.6f} | "
+            f"real_mape={shared_baseline.val_with_text.real_mape:.6f}%"
         ),
         (
             f"val_pca | mae={shared_baseline.val_pca.mae:.6f} | "
             f"rmse={shared_baseline.val_pca.rmse:.6f} | "
-            f"mape={shared_baseline.val_pca.mape:.6f}%"
+            f"mape={shared_baseline.val_pca.mape:.6f}% | "
+            f"real_mae={shared_baseline.val_pca.real_mae:.6f} | "
+            f"real_rmse={shared_baseline.val_pca.real_rmse:.6f} | "
+            f"real_mape={shared_baseline.val_pca.real_mape:.6f}%"
         ),
         (
             "val_truncate | unavailable"
@@ -1540,23 +1644,35 @@ def _write_summary_log(
                 f"val_truncate | label={shared_baseline.val_truncate_label} | "
                 f"mae={shared_baseline.val_truncate.mae:.6f} | "
                 f"rmse={shared_baseline.val_truncate.rmse:.6f} | "
-                f"mape={shared_baseline.val_truncate.mape:.6f}%"
+                f"mape={shared_baseline.val_truncate.mape:.6f}% | "
+                f"real_mae={shared_baseline.val_truncate.real_mae:.6f} | "
+                f"real_rmse={shared_baseline.val_truncate.real_rmse:.6f} | "
+                f"real_mape={shared_baseline.val_truncate.real_mape:.6f}%"
             )
         ),
         (
             f"test_no_text | mae={shared_baseline.test_no_text.mae:.6f} | "
             f"rmse={shared_baseline.test_no_text.rmse:.6f} | "
-            f"mape={shared_baseline.test_no_text.mape:.6f}%"
+            f"mape={shared_baseline.test_no_text.mape:.6f}% | "
+            f"real_mae={shared_baseline.test_no_text.real_mae:.6f} | "
+            f"real_rmse={shared_baseline.test_no_text.real_rmse:.6f} | "
+            f"real_mape={shared_baseline.test_no_text.real_mape:.6f}%"
         ),
         (
             f"test_with_text | mae={shared_baseline.test_with_text.mae:.6f} | "
             f"rmse={shared_baseline.test_with_text.rmse:.6f} | "
-            f"mape={shared_baseline.test_with_text.mape:.6f}%"
+            f"mape={shared_baseline.test_with_text.mape:.6f}% | "
+            f"real_mae={shared_baseline.test_with_text.real_mae:.6f} | "
+            f"real_rmse={shared_baseline.test_with_text.real_rmse:.6f} | "
+            f"real_mape={shared_baseline.test_with_text.real_mape:.6f}%"
         ),
         (
             f"test_pca | mae={shared_baseline.test_pca.mae:.6f} | "
             f"rmse={shared_baseline.test_pca.rmse:.6f} | "
-            f"mape={shared_baseline.test_pca.mape:.6f}%"
+            f"mape={shared_baseline.test_pca.mape:.6f}% | "
+            f"real_mae={shared_baseline.test_pca.real_mae:.6f} | "
+            f"real_rmse={shared_baseline.test_pca.real_rmse:.6f} | "
+            f"real_mape={shared_baseline.test_pca.real_mape:.6f}%"
         ),
         (
             "test_truncate | unavailable"
@@ -1565,7 +1681,10 @@ def _write_summary_log(
                 f"test_truncate | label={shared_baseline.test_truncate_label} | "
                 f"mae={shared_baseline.test_truncate.mae:.6f} | "
                 f"rmse={shared_baseline.test_truncate.rmse:.6f} | "
-                f"mape={shared_baseline.test_truncate.mape:.6f}%"
+                f"mape={shared_baseline.test_truncate.mape:.6f}% | "
+                f"real_mae={shared_baseline.test_truncate.real_mae:.6f} | "
+                f"real_rmse={shared_baseline.test_truncate.real_rmse:.6f} | "
+                f"real_mape={shared_baseline.test_truncate.real_mape:.6f}%"
             )
         ),
         "",
@@ -1577,9 +1696,15 @@ def _write_summary_log(
             f"val_mae={best_trial.val_mae:.6f} | "
             f"val_rmse={best_trial.val_rmse:.6f} | "
             f"val_mape={best_trial.val_mape:.6f}% | "
+            f"val_real_mae={best_trial.val_real_mae:.6f} | "
+            f"val_real_rmse={best_trial.val_real_rmse:.6f} | "
+            f"val_real_mape={best_trial.val_real_mape:.6f}% | "
             f"test_mae={best_trial.test_mae:.6f} | "
             f"test_rmse={best_trial.test_rmse:.6f} | "
-            f"test_mape={best_trial.test_mape:.6f}%"
+            f"test_mape={best_trial.test_mape:.6f}% | "
+            f"test_real_mae={best_trial.test_real_mae:.6f} | "
+            f"test_real_rmse={best_trial.test_real_rmse:.6f} | "
+            f"test_real_mape={best_trial.test_real_mape:.6f}%"
         ),
         (
             f"params | text_attn_layers={best_trial.text_attn_layers} | "
@@ -1604,7 +1729,9 @@ def _write_summary_log(
                 (
                     f"best_trial_horizon={metrics.horizon} | best_epoch={metrics.best_epoch} | "
                     f"val_mae={metrics.val_mae:.6f} | val_rmse={metrics.val_rmse:.6f} | "
-                    f"test_mae={metrics.test_mae:.6f} | test_rmse={metrics.test_rmse:.6f}"
+                    f"val_real_mae={metrics.val_real_mae:.6f} | val_real_rmse={metrics.val_real_rmse:.6f} | "
+                    f"test_mae={metrics.test_mae:.6f} | test_rmse={metrics.test_rmse:.6f} | "
+                    f"test_real_mae={metrics.test_real_mae:.6f} | test_real_rmse={metrics.test_real_rmse:.6f}"
                 )
             )
     lines.append(f"Top {top_limit} Trials")
@@ -1615,8 +1742,14 @@ def _write_summary_log(
                 f"objective={result.ranking_score:.6f} | "
                 f"val_mae={result.val_mae:.6f} | val_rmse={result.val_rmse:.6f} | "
                 f"val_mape={result.val_mape:.6f}% | "
+                f"val_real_mae={result.val_real_mae:.6f} | "
+                f"val_real_rmse={result.val_real_rmse:.6f} | "
+                f"val_real_mape={result.val_real_mape:.6f}% | "
                 f"test_mae={result.test_mae:.6f} | test_rmse={result.test_rmse:.6f} | "
-                f"test_mape={result.test_mape:.6f}% | text_attn_layers={result.text_attn_layers} | "
+                f"test_mape={result.test_mape:.6f}% | "
+                f"test_real_mae={result.test_real_mae:.6f} | "
+                f"test_real_rmse={result.test_real_rmse:.6f} | "
+                f"test_real_mape={result.test_real_mape:.6f}% | text_attn_layers={result.text_attn_layers} | "
                 f"epochs={result.epochs} | gate_lr={result.gate_lr} | "
                 f"text_attn_lr={result.text_attn_lr} | gate_logit_clamp={result.gate_logit_clamp} | "
                 f"tune_batch_size={result.tune_batch_size} | max_context={result.max_context} | "
@@ -1631,7 +1764,9 @@ def _write_summary_log(
                         f"trial_index={result.trial_index} horizon={metrics.horizon} | "
                         f"best_epoch={metrics.best_epoch} | val_mae={metrics.val_mae:.6f} | "
                         f"val_rmse={metrics.val_rmse:.6f} | "
-                        f"test_mae={metrics.test_mae:.6f} | test_rmse={metrics.test_rmse:.6f}"
+                        f"val_real_mae={metrics.val_real_mae:.6f} | val_real_rmse={metrics.val_real_rmse:.6f} | "
+                        f"test_mae={metrics.test_mae:.6f} | test_rmse={metrics.test_rmse:.6f} | "
+                        f"test_real_mae={metrics.test_real_mae:.6f} | test_real_rmse={metrics.test_real_rmse:.6f}"
                     )
                 )
 
@@ -1779,6 +1914,9 @@ def run_random_search(
                 val_mae=result.val_mae,
                 val_rmse=result.val_rmse,
                 val_mape=result.val_mape,
+                val_real_mae=result.val_real_mae,
+                val_real_rmse=result.val_real_rmse,
+                val_real_mape=result.val_real_mape,
             )
         ]
         for horizon_metric in horizon_metrics_source:
@@ -1805,6 +1943,9 @@ def run_random_search(
                     test_mae=test_metrics.mae,
                     test_rmse=test_metrics.rmse,
                     test_mape=test_metrics.mape,
+                    test_real_mae=test_metrics.real_mae,
+                    test_real_rmse=test_metrics.real_rmse,
+                    test_real_mape=test_metrics.real_mape,
                 )
             )
 
@@ -1815,6 +1956,9 @@ def run_random_search(
             test_mae=test_metrics.mae,
             test_rmse=test_metrics.rmse,
             test_mape=test_metrics.mape,
+            test_real_mae=test_metrics.real_mae,
+            test_real_rmse=test_metrics.real_rmse,
+            test_real_mape=test_metrics.real_mape,
             horizon_metrics=updated_horizon_metrics,
         )
         _append_test_metrics_to_trial_log(
@@ -1827,7 +1971,10 @@ def run_random_search(
         print(
             f"Test rank {rank} | trial_index={result.trial_index} | "
             f"test_mae={test_metrics.mae:.6f} | test_rmse={test_metrics.rmse:.6f} | "
-            f"test_mape={test_metrics.mape:.6f}%"
+            f"test_mape={test_metrics.mape:.6f}% | "
+            f"test_real_mae={test_metrics.real_mae:.6f} | "
+            f"test_real_rmse={test_metrics.real_rmse:.6f} | "
+            f"test_real_mape={test_metrics.real_mape:.6f}%"
         )
     print("Deleted all temporary HPO checkpoint bundles after test evaluation.")
     ranked_results = ranked_results_with_test
@@ -1839,6 +1986,7 @@ def run_random_search(
         f"objective={best_result.ranking_score:.6f} | "
         f"val_mae={best_result.val_mae:.6f} | "
         f"test_mae={best_result.test_mae:.6f} | "
+        f"test_real_mae={best_result.test_real_mae:.6f} | "
         f"target_lag_count={best_result.target_lag_count} | "
         f"embedding_lag_count={best_result.embedding_lag_count}"
     )
@@ -1849,6 +1997,7 @@ def run_random_search(
             f"{rank}. trial_index={result.trial_index} | best_epoch={result.best_epoch} | "
             f"objective={result.ranking_score:.6f} | "
             f"val_mae={result.val_mae:.6f} | test_mae={result.test_mae:.6f} | "
+            f"test_real_mae={result.test_real_mae:.6f} | "
             f"text_attn_layers={result.text_attn_layers} | "
             f"target_lag_count={result.target_lag_count} | "
             f"embedding_lag_count={result.embedding_lag_count}"
@@ -1857,7 +2006,8 @@ def run_random_search(
             for metrics in result.horizon_metrics:
                 print(
                     f"   horizon={metrics.horizon} | best_epoch={metrics.best_epoch} | "
-                    f"val_mae={metrics.val_mae:.6f} | test_mae={metrics.test_mae:.6f}"
+                    f"val_mae={metrics.val_mae:.6f} | test_mae={metrics.test_mae:.6f} | "
+                    f"test_real_mae={metrics.test_real_mae:.6f}"
                 )
 
     _write_trial_results_csv(output_dir, ranked_results)
@@ -1889,6 +2039,9 @@ def run_random_search(
             mae=best_result.test_mae,
             rmse=best_result.test_rmse,
             mape=best_result.test_mape,
+            real_mae=best_result.test_real_mae,
+            real_rmse=best_result.test_real_rmse,
+            real_mape=best_result.test_real_mape,
         ),
         "best_run_cfg": best_run_cfg,
         "total_combinations": total_combinations,

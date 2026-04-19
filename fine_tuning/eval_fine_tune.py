@@ -9,10 +9,21 @@ from tabdpt.utils import pad_x
 
 
 METRIC_LABEL_WIDTH = 28
+MetricTriplet = tuple[float, float, float]
+DualMetricTriplet = tuple[MetricTriplet, MetricTriplet]
 
 
 def _format_metrics(label: str, mae: float, rmse: float, mape: float) -> None:
     print(f"{label:<{METRIC_LABEL_WIDTH}} | MAE: {mae:.4f} | RMSE: {rmse:.4f} | MAPE: {mape:.4f}%")
+
+
+def _format_dual_metrics(
+    label: str,
+    normalized_metrics: MetricTriplet,
+    real_metrics: MetricTriplet,
+) -> None:
+    _format_metrics(f"{label} [normalized]", *normalized_metrics)
+    _format_metrics(f"{label} [real]", *real_metrics)
 
 
 def _compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> tuple[float, float, float]:
@@ -22,6 +33,19 @@ def _compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> tuple[float, flo
     denom = np.clip(np.abs(y_true), 1e-8, None)
     mape = float(np.mean(np.abs((y_true - y_pred) / denom)) * 100.0)
     return mae, rmse, mape
+
+
+def _inverse_transform_targets(
+    y: np.ndarray,
+    target_scaler: object | None,
+) -> np.ndarray:
+    if target_scaler is None:
+        return y.astype(np.float32, copy=False)
+    return (
+        target_scaler.inverse_transform(y.reshape(-1, 1).astype(np.float64, copy=False))
+        .reshape(-1)
+        .astype(np.float32, copy=False)
+    )
 
 
 def _available_history_counts(
@@ -222,12 +246,14 @@ def evaluate_rolling(
     text_context: np.ndarray | None,
     X_eval_proc: np.ndarray,
     y_eval: np.ndarray,
+    y_eval_real: np.ndarray,
     text_eval: np.ndarray | None,
     use_text: bool,
     label: str,
     max_context: int | None,
+    target_scaler: object | None,
     horizon: int = 1,
-) -> tuple[float, float, float]:
+) -> DualMetricTriplet:
     """
     Rolling evaluation with a fixed context and a sequential eval window.
 
@@ -281,9 +307,11 @@ def evaluate_rolling(
             pred, _, _ = pred
             preds[idx] = pred.squeeze(-1).reshape(-1).detach().cpu().numpy()[0]
 
-    mae, rmse, mape = _compute_metrics(y_eval, preds)
-    _format_metrics(label, mae, rmse, mape)
-    return mae, rmse, mape
+    normalized_metrics = _compute_metrics(y_eval, preds)
+    real_preds = _inverse_transform_targets(preds, target_scaler)
+    real_metrics = _compute_metrics(y_eval_real, real_preds)
+    _format_dual_metrics(label, normalized_metrics, real_metrics)
+    return normalized_metrics, real_metrics
 
 
 def evaluate_rolling_pca(
@@ -294,12 +322,14 @@ def evaluate_rolling_pca(
     text_context: np.ndarray,
     X_eval_proc: np.ndarray,
     y_eval: np.ndarray,
+    y_eval_real: np.ndarray,
     text_eval: np.ndarray,
     label: str,
     max_context: int | None,
+    target_scaler: object | None,
     max_total_features: int = 100,
     horizon: int = 1,
-) -> tuple[float, float, float]:
+) -> DualMetricTriplet:
     """
     Rolling evaluation like `evaluate_rolling`, but appends PCA-compressed text features to X.
 
@@ -352,9 +382,11 @@ def evaluate_rolling_pca(
             pred, _, _ = pred
             preds[idx] = pred.squeeze(-1).reshape(-1).detach().cpu().numpy()[0]
 
-    mae, rmse, mape = _compute_metrics(y_eval, preds)
-    _format_metrics(label, mae, rmse, mape)
-    return mae, rmse, mape
+    normalized_metrics = _compute_metrics(y_eval, preds)
+    real_preds = _inverse_transform_targets(preds, target_scaler)
+    real_metrics = _compute_metrics(y_eval_real, real_preds)
+    _format_dual_metrics(label, normalized_metrics, real_metrics)
+    return normalized_metrics, real_metrics
 
 
 def evaluate_rolling_truncate_text(
@@ -365,12 +397,14 @@ def evaluate_rolling_truncate_text(
     text_context: np.ndarray,
     X_eval_proc: np.ndarray,
     y_eval: np.ndarray,
+    y_eval_real: np.ndarray,
     text_eval: np.ndarray,
     label: str,
     max_context: int | None,
+    target_scaler: object | None,
     max_total_features: int = 100,
     horizon: int = 1,
-) -> tuple[tuple[float, float, float], str] | None:
+) -> tuple[DualMetricTriplet, str] | None:
     """
     Rolling evaluation like `evaluate_rolling_pca`, but uses the first k dims of each lag's
     text embedding (k is 32 or 16 chosen from the 100-feature budget). No PCA, no text attention.
@@ -378,7 +412,8 @@ def evaluate_rolling_truncate_text(
     Context/query row selection matches `evaluate_rolling` / `evaluate_rolling_pca`.
     If neither k=32 nor k=16 fits (budget or embed size), prints unavailable and returns None.
 
-    Returns ((mae, rmse, mape), metric_label) so callers can re-print after tuning.
+    Returns (((norm_mae, norm_rmse, norm_mape), (real_mae, real_rmse, real_mape)), metric_label)
+    so callers can re-print after tuning.
     """
     numeric_dim = int(X_context_proc.shape[1])
     num_lags = int(text_context.shape[1])
@@ -435,6 +470,8 @@ def evaluate_rolling_truncate_text(
             pred, _, _ = pred
             preds[idx] = pred.squeeze(-1).reshape(-1).detach().cpu().numpy()[0]
 
-    mae, rmse, mape = _compute_metrics(y_eval, preds)
-    _format_metrics(metric_label, mae, rmse, mape)
-    return (mae, rmse, mape), metric_label
+    normalized_metrics = _compute_metrics(y_eval, preds)
+    real_preds = _inverse_transform_targets(preds, target_scaler)
+    real_metrics = _compute_metrics(y_eval_real, real_preds)
+    _format_dual_metrics(metric_label, normalized_metrics, real_metrics)
+    return (normalized_metrics, real_metrics), metric_label
