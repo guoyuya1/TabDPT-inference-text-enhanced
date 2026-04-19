@@ -234,13 +234,6 @@ def set_random_seeds(seed: int) -> None:
     np.random.seed(seed)
 
 
-def _transform_feature_split(
-    scaler: StandardScaler,
-    X: np.ndarray,
-) -> np.ndarray:
-    return scaler.transform(X.astype(np.float64, copy=False)).astype(np.float32, copy=False)
-
-
 def _transform_target_split(
     scaler: StandardScaler,
     y: np.ndarray,
@@ -264,28 +257,50 @@ def inverse_transform_targets(
 def normalize_fine_tune_splits(
     splits: FineTuneDataSplits,
 ) -> tuple[FineTuneDataSplits, StandardScaler]:
-    if len(splits.X_train) == 0:
-        raise ValueError("Cannot fit feature normalizer on an empty train split.")
-    if len(splits.y_train) == 0:
-        raise ValueError("Cannot fit target normalizer on an empty train split.")
+    X_fit = np.concatenate((splits.X_context, splits.X_train), axis=0)
+    if len(X_fit) == 0:
+        raise ValueError("Cannot fit feature normalizer on an empty context+train split.")
 
-    feature_scaler = StandardScaler()
-    feature_scaler.fit(splits.X_train.astype(np.float64, copy=False))
+    y_fit = np.concatenate((splits.y_context, splits.y_train), axis=0)
+    if len(y_fit) == 0:
+        raise ValueError("Cannot fit target normalizer on an empty context+train split.")
+
+    X_context = splits.X_context.astype(np.float64, copy=True)
+    X_train = splits.X_train.astype(np.float64, copy=True)
+    X_val = splits.X_val.astype(np.float64, copy=True)
+    X_test = splits.X_test.astype(np.float64, copy=True)
+
+    for col_idx in range(X_fit.shape[1]):
+        feature_scaler = StandardScaler()
+        fit_column = X_fit[:, [col_idx]].astype(np.float64, copy=False)
+        feature_scaler.fit(fit_column)
+        X_context[:, [col_idx]] = feature_scaler.transform(
+            splits.X_context[:, [col_idx]].astype(np.float64, copy=False)
+        )
+        X_train[:, [col_idx]] = feature_scaler.transform(
+            splits.X_train[:, [col_idx]].astype(np.float64, copy=False)
+        )
+        X_val[:, [col_idx]] = feature_scaler.transform(
+            splits.X_val[:, [col_idx]].astype(np.float64, copy=False)
+        )
+        X_test[:, [col_idx]] = feature_scaler.transform(
+            splits.X_test[:, [col_idx]].astype(np.float64, copy=False)
+        )
 
     target_scaler = StandardScaler()
-    target_scaler.fit(splits.y_train.reshape(-1, 1).astype(np.float64, copy=False))
+    target_scaler.fit(y_fit.reshape(-1, 1).astype(np.float64, copy=False))
 
     normalized_splits = FineTuneDataSplits(
-        X_context=_transform_feature_split(feature_scaler, splits.X_context),
+        X_context=X_context.astype(np.float32, copy=False),
         y_context=_transform_target_split(target_scaler, splits.y_context),
         text_context=splits.text_context,
-        X_train=_transform_feature_split(feature_scaler, splits.X_train),
+        X_train=X_train.astype(np.float32, copy=False),
         y_train=_transform_target_split(target_scaler, splits.y_train),
         text_train=splits.text_train,
-        X_val=_transform_feature_split(feature_scaler, splits.X_val),
+        X_val=X_val.astype(np.float32, copy=False),
         y_val=_transform_target_split(target_scaler, splits.y_val),
         text_val=splits.text_val,
-        X_test=_transform_feature_split(feature_scaler, splits.X_test),
+        X_test=X_test.astype(np.float32, copy=False),
         y_test=_transform_target_split(target_scaler, splits.y_test),
         text_test=splits.text_test,
         ts_context=splits.ts_context,
