@@ -2,6 +2,7 @@ bitcoin:
   data_path: data/processed_data_time_features/bitcoin/bitcoin_gpt_analyzed_concise_text_lag_7_numeric_lag3.csv
   date_column: Date
   frequency: D
+  normalizer: standard
   numeric_features:
     - Open
     - High
@@ -17,6 +18,7 @@ economy:
   data_path: data/processed_data_time_features/economy/economy_v3_gpt_summarized.csv
   date_column: date
   frequency: MS
+  normalizer: standard
   numeric_features:
     - Exports
     - Imports
@@ -30,6 +32,7 @@ agriculture:
   data_path: data/processed_data_time_features/agriculture/Agriculture_with_text_with_embeddings_Qwen-Qwen3-Embedding-8B_lag_14.csv
   date_column: date
   frequency: MS
+  normalizer: standard
   numeric_features:
     - Wholesale broiler composite
     - Retail-wholesale spread for broiler composite
@@ -43,6 +46,7 @@ climate:
   data_path: data/processed_data_time_features/climate/Climate_with_text_with_embeddings_Qwen-Qwen3-Embedding-8B_lag_14.csv
   date_column: date
   frequency: W-TUE
+  normalizer: standard
   numeric_features:
     - MapDate
     - D0
@@ -61,6 +65,7 @@ health_afr:
   data_path: data/source_data/health_afr/raw/Health_AFR_with_text.csv
   date_column: date
   frequency: W-MON
+  normalizer: standard
   target_column: OT
   prediction_window: 6
   train_ratio: 0.7
@@ -71,6 +76,7 @@ health_us:
   data_path: data/processed_data_time_features/health_us/Health_US_with_text_with_embeddings_Qwen-Qwen3-Embedding-8B_lag_14.csv
   date_column: date
   frequency: W-MON
+  normalizer: standard
   numeric_features:
     - YEAR
     - WEEK
@@ -94,6 +100,7 @@ security:
   data_path: data/processed_data_time_features/security/Security_with_text_with_embeddings_Qwen-Qwen3-Embedding-8B_lag_14.csv
   date_column: date
   frequency: MS
+  normalizer: standard
   target_column: OT
   prediction_window: 6
   train_ratio: 0.7
@@ -104,6 +111,7 @@ social_good:
   data_path: data/processed_data_time_features/social_good/SocialGood_with_text_with_embeddings_Qwen-Qwen3-Embedding-8B_lag_14.csv
   date_column: date
   frequency: MS
+  normalizer: standard
   target_column: OT
   prediction_window: 6
   train_ratio: 0.7
@@ -114,6 +122,7 @@ traffic:
   data_path: data/processed_data_time_features/traffic/Traffic_with_text_with_embeddings_Qwen-Qwen3-Embedding-8B_lag_14.csv
   date_column: date
   frequency: MS
+  normalizer: standard
   target_column: OT
   prediction_window: 6
   train_ratio: 0.7

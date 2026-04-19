@@ -9,6 +9,53 @@ import numpy as np
 import pandas as pd
 import yaml
 from autogluon.timeseries import TimeSeriesDataFrame, TimeSeriesPredictor
+from sklearn.preprocessing import MinMaxScaler, RobustScaler, StandardScaler
+
+
+def build_normalizer(normalizer_name: str | None):
+    match normalizer_name:
+        case None:
+            return None
+        case "standard":
+            return StandardScaler()
+        case "minmax":
+            return MinMaxScaler()
+        case "robust":
+            return RobustScaler()
+        case _:
+            raise ValueError(f"Unsupported normalizer: {normalizer_name}")
+
+
+def normalize_by_train_split(
+    df: pd.DataFrame,
+    train_end: int,
+    columns: list[str],
+    normalizer_name: str | None,
+) -> tuple[pd.DataFrame, dict[str, object]]:
+    if normalizer_name is None or not columns:
+        return df.copy(), {}
+    if train_end <= 0:
+        raise ValueError("train_end must be positive when normalization is enabled")
+
+    normalized_df = df.copy()
+    normalized_df.loc[:, columns] = normalized_df.loc[:, columns].astype(np.float64)
+    scalers: dict[str, object] = {}
+
+    for column in columns:
+        scaler = build_normalizer(normalizer_name)
+        train_values = df.iloc[:train_end][[column]].to_numpy(dtype=np.float64)
+        full_values = df[[column]].to_numpy(dtype=np.float64)
+        scaler.fit(train_values)
+        normalized_df.loc[:, column] = scaler.transform(full_values).reshape(-1)
+        scalers[column] = scaler
+
+    return normalized_df, scalers
+
+
+def inverse_transform_target(value: float, target_scaler: object | None) -> float:
+    if target_scaler is None:
+        return float(value)
+    return float(target_scaler.inverse_transform(np.array([[value]], dtype=np.float64))[0, 0])
 
 
 def read_cfg(config_path: str, dataset: str | None) -> dict:
@@ -52,26 +99,31 @@ for dataset_name, cfg in all_cfgs.items():
     date_column = cfg["date_column"]
     frequency = cfg.get("frequency")
     target_column = str(cfg.get("target_column") or cfg.get("target"))
+    normalizer_name = cfg.get("normalizer")
     selected_columns = [date_column, *feature_columns, target_column]
     selected_columns = list(dict.fromkeys(selected_columns))
 
-    df = pd.read_csv(cfg["data_path"])
-    df = df.sort_values(date_column).reset_index(drop=True)[selected_columns]
+    raw_df = pd.read_csv(cfg["data_path"])
+    raw_df = raw_df.sort_values(date_column).reset_index(drop=True)[selected_columns]
 
     if cfg.get("max_rows") is not None:
-        df = df.iloc[: int(cfg["max_rows"])].copy()
+        raw_df = raw_df.iloc[: int(cfg["max_rows"])].copy()
     else:
-        df = df.copy()
+        raw_df = raw_df.copy()
 
-    df["item_id"] = 1
+    raw_df["item_id"] = 1
 
-    n_rows = len(df)
+    n_rows = len(raw_df)
     train_end = int(n_rows * float(cfg.get("train_ratio") or 0.0))
     val_end = train_end + int(n_rows * float(cfg.get("val_ratio") or 0.0))
-    prediction_window = 6
+    prediction_window = int(cfg.get("prediction_window") or 6)
     if not val_end and cfg.get("fit_rows") is not None:
         val_end = int(cfg["fit_rows"])
         train_end = val_end
+
+    normalized_columns = list(dict.fromkeys([*feature_columns, target_column]))
+    df, scalers = normalize_by_train_split(raw_df, train_end, normalized_columns, normalizer_name)
+    target_scaler = scalers.get(target_column)
 
     zero_shot_predictor = TimeSeriesPredictor(
         target=target_column,
@@ -98,10 +150,10 @@ for dataset_name, cfg in all_cfgs.items():
         available_horizon = min(prediction_window, len(df) - i)
         for horizon_offset in range(available_horizon):
             target_idx = i + horizon_offset
-            y_pred = fcst["mean"].iloc[horizon_offset]
-            y_true = df.loc[target_idx, target_column]
+            y_pred = inverse_transform_target(fcst["mean"].iloc[horizon_offset], target_scaler)
+            y_true = raw_df.loc[target_idx, target_column]
             zero_shot_preds.append(
-                {"index": target_idx, "date": df.loc[target_idx, date_column], "y_true": y_true, "y_pred": y_pred}
+                {"index": target_idx, "date": raw_df.loc[target_idx, date_column], "y_true": y_true, "y_pred": y_pred}
             )
 
     zero_shot_preds_df = pd.DataFrame(zero_shot_preds)
@@ -147,10 +199,10 @@ for dataset_name, cfg in all_cfgs.items():
         available_horizon = min(prediction_window, len(df) - i)
         for horizon_offset in range(available_horizon):
             target_idx = i + horizon_offset
-            y_pred = fcst["mean"].iloc[horizon_offset]
-            y_true = df.loc[target_idx, target_column]
+            y_pred = inverse_transform_target(fcst["mean"].iloc[horizon_offset], target_scaler)
+            y_true = raw_df.loc[target_idx, target_column]
             fine_tuned_preds.append(
-                {"index": target_idx, "date": df.loc[target_idx, date_column], "y_true": y_true, "y_pred": y_pred}
+                {"index": target_idx, "date": raw_df.loc[target_idx, date_column], "y_true": y_true, "y_pred": y_pred}
             )
 
     fine_tuned_preds_df = pd.DataFrame(fine_tuned_preds)
