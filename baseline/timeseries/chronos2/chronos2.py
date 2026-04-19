@@ -50,6 +50,7 @@ for dataset_name, cfg in all_cfgs.items():
             break
 
     date_column = cfg["date_column"]
+    frequency = cfg.get("frequency")
     target_column = str(cfg.get("target_column") or cfg.get("target"))
     selected_columns = [date_column, *feature_columns, target_column]
     selected_columns = list(dict.fromkeys(selected_columns))
@@ -75,6 +76,7 @@ for dataset_name, cfg in all_cfgs.items():
     zero_shot_predictor = TimeSeriesPredictor(
         target=target_column,
         prediction_length=prediction_window,
+        freq=frequency,
     )
     zero_shot_predictor.fit(
         TimeSeriesDataFrame.from_data_frame(
@@ -116,6 +118,7 @@ for dataset_name, cfg in all_cfgs.items():
     fine_tuned_predictor = TimeSeriesPredictor(
         target=target_column,
         prediction_length=prediction_window,
+        freq=frequency,
     )
     fine_tuned_predictor.fit(
         TimeSeriesDataFrame.from_data_frame(

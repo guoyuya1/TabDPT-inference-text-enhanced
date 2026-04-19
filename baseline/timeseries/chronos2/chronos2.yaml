@@ -1,41 +1,48 @@
 bitcoin:
-  data_path: data/source_data/bitcoin/v1/bitcoin_price_news.csv
+  data_path: data/processed_data_time_features/bitcoin/bitcoin_gpt_analyzed_concise_text_lag_7_numeric_lag3.csv
   date_column: Date
+  frequency: D
   numeric_features:
     - Open
     - High
     - Low
     - Volume
   target_column: Close
+  prediction_window: 6
   train_ratio: 0.7
   val_ratio: 0.1
   test_ratio: 0.2
 
 economy:
-  data_path: data/processed_data/economy/Economy_with_text_summarized_with_embeddings_Qwen_Qwen3-Embedding-4B_lag_3.csv
+  data_path: data/processed_data_time_features/economy/economy_v3_gpt_summarized.csv
   date_column: date
+  frequency: MS
   numeric_features:
     - Exports
     - Imports
   target_column: OT
+  prediction_window: 6
   train_ratio: 0.7
   val_ratio: 0.1
   test_ratio: 0.2
 
 agriculture:
-  data_path: data/source_data/agriculture/raw/Agriculture_with_text.csv
+  data_path: data/processed_data_time_features/agriculture/Agriculture_with_text_with_embeddings_Qwen-Qwen3-Embedding-8B_lag_14.csv
   date_column: date
+  frequency: MS
   numeric_features:
     - Wholesale broiler composite
     - Retail-wholesale spread for broiler composite
   target_column: OT
+  prediction_window: 6
   train_ratio: 0.7
   val_ratio: 0.1
   test_ratio: 0.2
 
 climate:
-  data_path: data/source_data/climate/raw/Climate_with_text.csv
+  data_path: data/processed_data_time_features/climate/Climate_with_text_with_embeddings_Qwen-Qwen3-Embedding-8B_lag_14.csv
   date_column: date
+  frequency: W-TUE
   numeric_features:
     - MapDate
     - D0
@@ -45,17 +52,7 @@ climate:
     - D4
     - StatisticFormatID
   target_column: OT
-  train_ratio: 0.7
-  val_ratio: 0.1
-  test_ratio: 0.2
-
-environment:
-  data_path: data/source_data/environment/raw/Environment_with_text.csv
-  date_column: date
-  numeric_features:
-    - CBSA Code
-    - Number of Sites Reporting
-  target_column: OT
+  prediction_window: 6
   train_ratio: 0.7
   val_ratio: 0.1
   test_ratio: 0.2
@@ -63,14 +60,17 @@ environment:
 health_afr:
   data_path: data/source_data/health_afr/raw/Health_AFR_with_text.csv
   date_column: date
+  frequency: W-MON
   target_column: OT
+  prediction_window: 6
   train_ratio: 0.7
   val_ratio: 0.1
   test_ratio: 0.2
 
 health_us:
-  data_path: data/source_data/health_us/raw/Health_US_with_text.csv
+  data_path: data/processed_data_time_features/health_us/Health_US_with_text_with_embeddings_Qwen-Qwen3-Embedding-8B_lag_14.csv
   date_column: date
+  frequency: W-MON
   numeric_features:
     - YEAR
     - WEEK
@@ -85,30 +85,37 @@ health_us:
     - NUM. OF PROVIDERS
     - TOTAL PATIENTS
   target_column: OT
+  prediction_window: 6
   train_ratio: 0.7
   val_ratio: 0.1
   test_ratio: 0.2
 
 security:
-  data_path: data/source_data/security/raw/Security_with_text.csv
+  data_path: data/processed_data_time_features/security/Security_with_text_with_embeddings_Qwen-Qwen3-Embedding-8B_lag_14.csv
   date_column: date
+  frequency: MS
   target_column: OT
+  prediction_window: 6
   train_ratio: 0.7
   val_ratio: 0.1
   test_ratio: 0.2
 
 social_good:
-  data_path: data/source_data/social_good/raw/SocialGood_with_text.csv
+  data_path: data/processed_data_time_features/social_good/SocialGood_with_text_with_embeddings_Qwen-Qwen3-Embedding-8B_lag_14.csv
   date_column: date
+  frequency: MS
   target_column: OT
+  prediction_window: 6
   train_ratio: 0.7
   val_ratio: 0.1
   test_ratio: 0.2
 
 traffic:
-  data_path: data/source_data/traffic/raw/Traffic_with_text.csv
+  data_path: data/processed_data_time_features/traffic/Traffic_with_text_with_embeddings_Qwen-Qwen3-Embedding-8B_lag_14.csv
   date_column: date
+  frequency: MS
   target_column: OT
+  prediction_window: 6
   train_ratio: 0.7
   val_ratio: 0.1
   test_ratio: 0.2
