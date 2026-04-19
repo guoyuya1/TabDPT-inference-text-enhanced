@@ -40,6 +40,9 @@ class TuningConfig:
 class DataConfig:
     data_path: str
     date_column: str | None
+    calendar_frequency: str | None
+    seasonality_k: int
+    seasonality_L: int | None
     numeric_features: list[str]
     target_column: str
     embedding_lags: list[int]
@@ -97,6 +100,9 @@ def load_dataset_config(config_path: str, dataset_name: str | None) -> dict:
 def load_fine_tune_config(config_path: str, dataset_name: str | None) -> DataConfig:
     dataset_cfg = dict(load_dataset_config(config_path, dataset_name))
     dataset_cfg.setdefault("prediction_window", 1)
+    dataset_cfg.setdefault("calendar_frequency", None)
+    dataset_cfg.setdefault("seasonality_k", 3)
+    dataset_cfg.setdefault("seasonality_L", None)
     dataset_cfg.setdefault("embedding_lags", [])
     dataset_cfg.setdefault("embedding_columns", None)
     dataset_cfg.setdefault("embedding_column_template", None)
@@ -162,6 +168,10 @@ def load_fine_tune_config(config_path: str, dataset_name: str | None) -> DataCon
         for key in DataConfig.__dataclass_fields__
         if key in dataset_cfg
     }
+    dataset_cfg["seasonality_k"] = _validate_positive_int(
+        "seasonality_k",
+        dataset_cfg["seasonality_k"],
+    )
     dataset_cfg["prediction_window"] = _validate_positive_int(
         "prediction_window",
         dataset_cfg["prediction_window"],

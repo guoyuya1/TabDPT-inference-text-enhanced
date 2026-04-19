@@ -23,6 +23,7 @@ import copy
 from dataclasses import dataclass
 
 import numpy as np
+import pandas as pd
 import schedulefree  # type: ignore
 import torch
 from sklearn.metrics import mean_absolute_error, mean_squared_error
@@ -40,9 +41,11 @@ try:
     )
     from .fine_tune_configs import DataConfig, TuningConfig, load_fine_tune_config
     from .load_dataset import (
-        build_direct_multi_horizon_dataset,
+        build_causal_fixed_origin_horizon_splits,
         load_tabular_text_dataset,
+        load_tabular_text_dataset_with_timestamps,
         select_direct_horizon_targets,
+        validate_direct_mode_numeric_features,
     )
     from .split_ts import time_split
 except ImportError:
@@ -55,9 +58,11 @@ except ImportError:
     )
     from fine_tune_configs import DataConfig, TuningConfig, load_fine_tune_config
     from load_dataset import (
-        build_direct_multi_horizon_dataset,
+        build_causal_fixed_origin_horizon_splits,
         load_tabular_text_dataset,
+        load_tabular_text_dataset_with_timestamps,
         select_direct_horizon_targets,
+        validate_direct_mode_numeric_features,
     )
     from split_ts import time_split
 
@@ -86,6 +91,13 @@ class FineTuneDataSplits:
     X_test: np.ndarray
     y_test: np.ndarray
     text_test: np.ndarray
+    ts_context: np.ndarray | None = None
+    ts_train: np.ndarray | None = None
+    ts_val: np.ndarray | None = None
+    ts_test: np.ndarray | None = None
+    calendar_frequency: str | None = None
+    seasonality_k: int = 3
+    seasonality_L: int | None = None
 
 
 @dataclass(frozen=True)
@@ -210,8 +222,11 @@ def set_random_seeds(seed: int) -> None:
     np.random.seed(seed)
 
 
-def load_fine_tune_arrays(run_cfg: DataConfig) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    X, y, text = load_tabular_text_dataset(
+def load_fine_tune_arrays(
+    run_cfg: DataConfig,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
+    validate_direct_mode_numeric_features(run_cfg.numeric_features)
+    X, y, text, timestamps = load_tabular_text_dataset_with_timestamps(
         path=run_cfg.data_path,
         date_column=run_cfg.date_column,
         numeric_features=run_cfg.numeric_features,
@@ -223,7 +238,8 @@ def load_fine_tune_arrays(run_cfg: DataConfig) -> tuple[np.ndarray, np.ndarray, 
     )
     if X.shape[1] == 0:
         X = np.zeros((X.shape[0], 1), dtype=np.float32)
-    return X, y, text
+    timestamps_array = None if timestamps is None else timestamps.to_numpy()
+    return X, y, text, timestamps_array
 
 
 def prediction_horizons(run_cfg: DataConfig) -> range:
@@ -236,30 +252,52 @@ def split_fine_tune_data(
     X: np.ndarray,
     y: np.ndarray,
     text: np.ndarray,
+    timestamps: np.ndarray | None,
 ) -> FineTuneDataSplits:
+    split_values = time_split(
+        X,
+        y,
+        text,
+        context_ratio=run_cfg.context_ratio,
+        train_ratio=run_cfg.train_ratio,
+        val_ratio=run_cfg.val_ratio,
+        test_ratio=run_cfg.test_ratio,
+    )
+    ts_context = ts_train = ts_val = ts_test = None
+    if timestamps is not None:
+        n_context = len(split_values[1])
+        n_train = len(split_values[4])
+        n_val = len(split_values[7])
+        ts_context = timestamps[:n_context]
+        ts_train = timestamps[n_context:n_context + n_train]
+        ts_val = timestamps[n_context + n_train:n_context + n_train + n_val]
+        ts_test = timestamps[n_context + n_train + n_val:]
     return FineTuneDataSplits(
-        *time_split(
-            X,
-            y,
-            text,
-            context_ratio=run_cfg.context_ratio,
-            train_ratio=run_cfg.train_ratio,
-            val_ratio=run_cfg.val_ratio,
-            test_ratio=run_cfg.test_ratio,
-        )
+        X_context=split_values[0],
+        y_context=split_values[1],
+        text_context=split_values[2],
+        X_train=split_values[3],
+        y_train=split_values[4],
+        text_train=split_values[5],
+        X_val=split_values[6],
+        y_val=split_values[7],
+        text_val=split_values[8],
+        X_test=split_values[9],
+        y_test=split_values[10],
+        text_test=split_values[11],
+        ts_context=ts_context,
+        ts_train=ts_train,
+        ts_val=ts_val,
+        ts_test=ts_test,
+        calendar_frequency=run_cfg.calendar_frequency,
+        seasonality_k=run_cfg.seasonality_k,
+        seasonality_L=run_cfg.seasonality_L,
     )
 
 
 def load_and_split_fine_tune_data(run_cfg: DataConfig) -> FineTuneDataSplits:
-    X, y, text = load_fine_tune_arrays(run_cfg)
-    if run_cfg.prediction_window > 1:
-        X, y, text = build_direct_multi_horizon_dataset(
-            X,
-            y,
-            text,
-            prediction_window=run_cfg.prediction_window,
-        )
-    return split_fine_tune_data(run_cfg, X=X, y=y, text=text)
+    X, y, text, timestamps = load_fine_tune_arrays(run_cfg)
+    return split_fine_tune_data(run_cfg, X=X, y=y, text=text, timestamps=timestamps)
 
 
 def select_fine_tune_splits_for_horizon(
@@ -267,6 +305,73 @@ def select_fine_tune_splits_for_horizon(
     *,
     horizon: int,
 ) -> FineTuneDataSplits:
+    if (
+        data_splits.ts_context is not None
+        and data_splits.ts_train is not None
+        and data_splits.ts_val is not None
+        and data_splits.ts_test is not None
+    ):
+        split_values = build_causal_fixed_origin_horizon_splits(
+            np.concatenate((data_splits.X_context, data_splits.X_train, data_splits.X_val, data_splits.X_test), axis=0),
+            np.concatenate((data_splits.y_context, data_splits.y_train, data_splits.y_val, data_splits.y_test), axis=0),
+            np.concatenate((data_splits.text_context, data_splits.text_train, data_splits.text_val, data_splits.text_test), axis=0),
+            pd.Series(
+                np.concatenate(
+                    (data_splits.ts_context, data_splits.ts_train, data_splits.ts_val, data_splits.ts_test),
+                    axis=0,
+                )
+            ),
+            calendar_frequency=data_splits.calendar_frequency,
+            context_ratio=len(data_splits.y_context)
+            / (
+                len(data_splits.y_context)
+                + len(data_splits.y_train)
+                + len(data_splits.y_val)
+                + len(data_splits.y_test)
+            ),
+            train_ratio=len(data_splits.y_train)
+            / (
+                len(data_splits.y_context)
+                + len(data_splits.y_train)
+                + len(data_splits.y_val)
+                + len(data_splits.y_test)
+            ),
+            val_ratio=len(data_splits.y_val)
+            / (
+                len(data_splits.y_context)
+                + len(data_splits.y_train)
+                + len(data_splits.y_val)
+                + len(data_splits.y_test)
+            ),
+            test_ratio=len(data_splits.y_test)
+            / (
+                len(data_splits.y_context)
+                + len(data_splits.y_train)
+                + len(data_splits.y_val)
+                + len(data_splits.y_test)
+            ),
+            horizon=horizon,
+            seasonality_k=data_splits.seasonality_k,
+            seasonality_L=data_splits.seasonality_L,
+        )
+        return FineTuneDataSplits(
+            X_context=split_values[0],
+            y_context=split_values[1],
+            text_context=split_values[2],
+            X_train=split_values[3],
+            y_train=split_values[4],
+            text_train=split_values[5],
+            X_val=split_values[6],
+            y_val=split_values[7],
+            text_val=split_values[8],
+            X_test=split_values[9],
+            y_test=split_values[10],
+            text_test=split_values[11],
+            calendar_frequency=data_splits.calendar_frequency,
+            seasonality_k=data_splits.seasonality_k,
+            seasonality_L=data_splits.seasonality_L,
+        )
+
     X_context, y_context, text_context = select_direct_horizon_targets(
         data_splits.X_context,
         data_splits.y_context,
@@ -305,6 +410,9 @@ def select_fine_tune_splits_for_horizon(
         X_test=X_test,
         y_test=y_test,
         text_test=text_test,
+        calendar_frequency=data_splits.calendar_frequency,
+        seasonality_k=data_splits.seasonality_k,
+        seasonality_L=data_splits.seasonality_L,
     )
 
 
@@ -367,6 +475,19 @@ def _prepared_eval_inputs(
     split_name: str,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     splits = prepared_trial.splits
+    trim = max(0, prepared_trial.prediction_horizon - 1)
+
+    def _trim_history_tail(
+        X_hist: np.ndarray,
+        y_hist: np.ndarray,
+        text_hist: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        if trim == 0:
+            return X_hist, y_hist, text_hist
+        if trim >= len(y_hist):
+            return X_hist[:0], y_hist[:0], text_hist[:0]
+        return X_hist[:-trim], y_hist[:-trim], text_hist[:-trim]
+
     if split_name == "train":
         return (
             prepared_trial.X_context_proc,
@@ -377,19 +498,29 @@ def _prepared_eval_inputs(
             splits.text_train,
         )
     if split_name == "val":
-        return (
+        X_hist, y_hist, text_hist = _trim_history_tail(
             np.concatenate((prepared_trial.X_context_proc, prepared_trial.X_train_proc)),
             np.concatenate((splits.y_context, splits.y_train)),
             np.concatenate((splits.text_context, splits.text_train), axis=0),
+        )
+        return (
+            X_hist,
+            y_hist,
+            text_hist,
             prepared_trial.X_val_proc,
             splits.y_val,
             splits.text_val,
         )
     if split_name == "test":
-        return (
+        X_hist, y_hist, text_hist = _trim_history_tail(
             np.concatenate((prepared_trial.X_context_proc, prepared_trial.X_train_proc, prepared_trial.X_val_proc)),
             np.concatenate((splits.y_context, splits.y_train, splits.y_val)),
             np.concatenate((splits.text_context, splits.text_train, splits.text_val), axis=0),
+        )
+        return (
+            X_hist,
+            y_hist,
+            text_hist,
             prepared_trial.X_test_proc,
             splits.y_test,
             splits.text_test,

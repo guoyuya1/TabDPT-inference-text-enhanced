@@ -1,5 +1,7 @@
 data_path: data/processed_data_time_features/economy/economy_v3_gpt_analyzed.csv
 date_column: date
+calendar_frequency: month
+seasonality_k: 3
 numeric_features:
 - Exports_lag1
 - Exports_lag2
@@ -10,23 +12,6 @@ numeric_features:
 - OT_lag1
 - OT_lag2
 - OT_lag3
-- time_cal_feat_000
-- time_cal_feat_001
-- time_cal_feat_002
-- time_cal_feat_003
-- time_cal_feat_004
-- time_cal_feat_005
-- time_cal_feat_006
-- time_cal_feat_007
-- time_cal_feat_008
-- time_cal_feat_009
-- time_cal_feat_010
-- time_cal_feat_011
-- time_cal_feat_012
-- time_cal_feat_013
-- time_cal_feat_014
-- time_cal_feat_015
-- time_cal_feat_016
 target_column: OT
 embedding_lags: []
 embedding_columns:

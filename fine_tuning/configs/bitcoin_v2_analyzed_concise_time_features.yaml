@@ -1,5 +1,7 @@
 data_path: data/processed_data_time_features/bitcoin/bitcoin_gpt_analyzed_concise_text_lag_7_numeric_lag3.csv
 date_column: Date
+calendar_frequency: day
+seasonality_k: 3
 numeric_features:
 - Open_lag1
 - Open_lag2
@@ -16,15 +18,6 @@ numeric_features:
 - Adj_Close_lag1
 - Adj_Close_lag2
 - Adj_Close_lag3
-- time_cal_feat_000
-- time_cal_feat_001
-- time_cal_feat_002
-- time_cal_feat_003
-- time_cal_feat_004
-- time_cal_feat_005
-- time_cal_feat_006
-- time_cal_feat_007
-- time_cal_feat_008
 target_column: Adj_Close
 embedding_lags: []
 embedding_columns:

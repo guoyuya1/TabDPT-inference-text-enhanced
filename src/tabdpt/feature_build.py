@@ -104,6 +104,33 @@ def generate_seasonality_features(target_values, k: int, L: int = None):
     return np.tile(np.asarray(ts_features, dtype=float), (len(target_values), 1))
 
 
+def generate_causal_seasonality_features(target_values, k: int, L: int = None):
+    """
+    Compute seasonality features causally for each row using only history up to that row.
+
+    Row i is derived from target_values[: i + 1], so no future target information is used.
+    """
+    if k == 0:
+        return np.empty((len(target_values), 0))
+
+    values = np.asarray(target_values, dtype=float)
+    features = np.empty((len(values), 2 * k), dtype=float)
+    window = L if L is not None else DEFAULT_SEAS_SMOOTHING_WINDOW
+    for idx in range(len(values)):
+        prefix = values[: idx + 1]
+        periods = extract_top_k_seasonalities(prefix, k=k, L=window)
+        row: list[float] = []
+        for period in periods:
+            if period is None:
+                row.extend([np.nan, np.nan])
+                continue
+            row.extend([np.sin(2 * np.pi / period), np.cos(2 * np.pi / period)])
+        while len(row) < 2 * k:
+            row.append(np.nan)
+        features[idx] = np.asarray(row, dtype=float)
+    return features
+
+
 def generate_calendar_features(time_stamp, frequency):
     # Normalize frequency aliases
     frequency_map = {

@@ -30,10 +30,11 @@ def _available_history_counts(
     horizon: int,
 ) -> tuple[int, int]:
     """
-    Return how many context and eval labels are observable for a direct horizon.
+    Return how many context and eval labels are observable for a causal horizon.
 
-    For horizon h, a row's label only becomes observable after h-1 additional
-    timestamps have passed. This helper returns the number of usable rows from:
+    Context rows are assumed to already contain only fully observable labels.
+    For horizon h, an eval/query row's label becomes observable after h
+    forecast-origin steps. This helper returns the number of usable rows from:
     - the fixed context prefix
     - the rolling eval prefix
     """
@@ -44,15 +45,8 @@ def _available_history_counts(
     if horizon <= 0:
         raise ValueError("horizon must be positive.")
 
-    total_available = context_len + idx - horizon + 1
-    if total_available <= 0:
-        raise ValueError(
-            "Not enough observed history for the requested horizon. "
-            f"Got context_len={context_len}, idx={idx}, horizon={horizon}."
-        )
-
-    context_count = min(context_len, total_available)
-    eval_count = max(0, total_available - context_len)
+    context_count = context_len
+    eval_count = max(0, idx - horizon + 1)
     return context_count, eval_count
 
 
