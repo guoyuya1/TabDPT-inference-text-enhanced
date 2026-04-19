@@ -1,6 +1,8 @@
 bitcoin:
   data_path: data/processed_data_time_features/bitcoin/bitcoin_gpt_analyzed_concise_text_lag_7_numeric_lag3.csv
   date_column: Date
+  calendar_frequency: day
+  seasonality_k: 3
   numeric_features:
     - Open_lag1
     - Open_lag2
@@ -17,15 +19,6 @@ bitcoin:
     - Adj_Close_lag1
     - Adj_Close_lag2
     - Adj_Close_lag3
-    - time_cal_feat_000
-    - time_cal_feat_001
-    - time_cal_feat_002
-    - time_cal_feat_003
-    - time_cal_feat_004
-    - time_cal_feat_005
-    - time_cal_feat_006
-    - time_cal_feat_007
-    - time_cal_feat_008
   target_column: Adj_Close
   seed: 0
   prediction_window: 6
@@ -35,10 +28,12 @@ bitcoin:
   val_ratio: 0.1
   test_ratio: 0.2
   max_context: 2000
-  
+
 agriculture:
   data_path: data/processed_data_time_features/agriculture/Agriculture_with_text_with_embeddings_Qwen-Qwen3-Embedding-8B_lag_14.csv
   date_column: date
+  calendar_frequency: month
+  seasonality_k: 3
   numeric_features:
     - Wholesale broiler composite_lag1
     - Wholesale broiler composite_lag2
@@ -46,23 +41,6 @@ agriculture:
     - Retail-wholesale spread for broiler composite_lag1
     - Retail-wholesale spread for broiler composite_lag2
     - Retail-wholesale spread for broiler composite_lag3
-    - time_cal_feat_000
-    - time_cal_feat_001
-    - time_cal_feat_002
-    - time_cal_feat_003
-    - time_cal_feat_004
-    - time_cal_feat_005
-    - time_cal_feat_006
-    - time_cal_feat_007
-    - time_cal_feat_008
-    - time_cal_feat_009
-    - time_cal_feat_010
-    - time_cal_feat_011
-    - time_cal_feat_012
-    - time_cal_feat_013
-    - time_cal_feat_014
-    - time_cal_feat_015
-    - time_cal_feat_016
   target_column: OT
   seed: 0
   prediction_window: 6
@@ -75,6 +53,8 @@ agriculture:
 climate:
   data_path: data/processed_data_time_features/climate/Climate_with_text_with_embeddings_Qwen-Qwen3-Embedding-8B_lag_14.csv
   date_column: date
+  calendar_frequency: month
+  seasonality_k: 3
   numeric_features:
     - MapDate_lag1
     - MapDate_lag2
@@ -97,23 +77,6 @@ climate:
     - StatisticFormatID_lag1
     - StatisticFormatID_lag2
     - StatisticFormatID_lag3
-    - time_cal_feat_000
-    - time_cal_feat_001
-    - time_cal_feat_002
-    - time_cal_feat_003
-    - time_cal_feat_004
-    - time_cal_feat_005
-    - time_cal_feat_006
-    - time_cal_feat_007
-    - time_cal_feat_008
-    - time_cal_feat_009
-    - time_cal_feat_010
-    - time_cal_feat_011
-    - time_cal_feat_012
-    - time_cal_feat_013
-    - time_cal_feat_014
-    - time_cal_feat_015
-    - time_cal_feat_016
   target_column: OT
   seed: 0
   prediction_window: 6
@@ -126,6 +89,8 @@ climate:
 economy:
   data_path: data/processed_data_time_features/economy/economy_v3_gpt_summarized.csv
   date_column: date
+  calendar_frequency: month
+  seasonality_k: 3
   numeric_features:
     - Exports_lag1
     - Exports_lag2
@@ -136,23 +101,6 @@ economy:
     - OT_lag1
     - OT_lag2
     - OT_lag3
-    - time_cal_feat_000
-    - time_cal_feat_001
-    - time_cal_feat_002
-    - time_cal_feat_003
-    - time_cal_feat_004
-    - time_cal_feat_005
-    - time_cal_feat_006
-    - time_cal_feat_007
-    - time_cal_feat_008
-    - time_cal_feat_009
-    - time_cal_feat_010
-    - time_cal_feat_011
-    - time_cal_feat_012
-    - time_cal_feat_013
-    - time_cal_feat_014
-    - time_cal_feat_015
-    - time_cal_feat_016
   target_column: OT
   seed: 0
   prediction_window: 6
@@ -165,6 +113,8 @@ economy:
 energy:
   data_path: data/processed_data_time_features/energy/Energy_gpt_analyzed_concise_text_lag_7_numeric_lag14.csv
   date_column: date
+  calendar_frequency: week
+  seasonality_k: 3
   numeric_features:
     - OT_lag1
     - OT_lag2
@@ -193,21 +143,6 @@ energy:
     - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag1
     - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag2
     - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag3
-    - time_cal_feat_000
-    - time_cal_feat_001
-    - time_cal_feat_002
-    - time_cal_feat_003
-    - time_cal_feat_004
-    - time_cal_feat_005
-    - time_cal_feat_006
-    - time_cal_feat_007
-    - time_cal_feat_008
-    - time_cal_feat_009
-    - time_cal_feat_010
-    - time_cal_feat_011
-    - time_cal_feat_012
-    - time_cal_feat_013
-    - time_cal_feat_014
   target_column: OT
   seed: 0
   prediction_window: 6
@@ -220,6 +155,8 @@ energy:
 environment:
   data_path: data/processed_data_time_features/environment/Environment_with_text_with_embeddings_Qwen-Qwen3-Embedding-8B_lag_14.csv
   date_column: date
+  calendar_frequency: month
+  seasonality_k: 3
   numeric_features:
     - CBSA Code_lag1
     - CBSA Code_lag2
@@ -227,23 +164,6 @@ environment:
     - Number of Sites Reporting_lag1
     - Number of Sites Reporting_lag2
     - Number of Sites Reporting_lag3
-    - time_cal_feat_000
-    - time_cal_feat_001
-    - time_cal_feat_002
-    - time_cal_feat_003
-    - time_cal_feat_004
-    - time_cal_feat_005
-    - time_cal_feat_006
-    - time_cal_feat_007
-    - time_cal_feat_008
-    - time_cal_feat_009
-    - time_cal_feat_010
-    - time_cal_feat_011
-    - time_cal_feat_012
-    - time_cal_feat_013
-    - time_cal_feat_014
-    - time_cal_feat_015
-    - time_cal_feat_016
   target_column: OT
   seed: 0
   prediction_window: 6
@@ -256,6 +176,8 @@ environment:
 health_us:
   data_path: data/processed_data_time_features/health_us/Health_US_with_text_with_embeddings_Qwen-Qwen3-Embedding-8B_lag_14.csv
   date_column: date
+  calendar_frequency: month
+  seasonality_k: 3
   numeric_features:
     - YEAR_lag1
     - YEAR_lag2
@@ -284,23 +206,6 @@ health_us:
     - TOTAL PATIENTS_lag1
     - TOTAL PATIENTS_lag2
     - TOTAL PATIENTS_lag3
-    - time_cal_feat_000
-    - time_cal_feat_001
-    - time_cal_feat_002
-    - time_cal_feat_003
-    - time_cal_feat_004
-    - time_cal_feat_005
-    - time_cal_feat_006
-    - time_cal_feat_007
-    - time_cal_feat_008
-    - time_cal_feat_009
-    - time_cal_feat_010
-    - time_cal_feat_011
-    - time_cal_feat_012
-    - time_cal_feat_013
-    - time_cal_feat_014
-    - time_cal_feat_015
-    - time_cal_feat_016
   target_column: OT
   seed: 0
   prediction_window: 6
@@ -313,27 +218,12 @@ health_us:
 security:
   data_path: data/processed_data_time_features/security/Security_with_text_with_embeddings_Qwen-Qwen3-Embedding-8B_lag_14.csv
   date_column: date
+  calendar_frequency: month
+  seasonality_k: 3
   numeric_features:
     - OT_lag1
     - OT_lag2
     - OT_lag3
-    - time_cal_feat_000
-    - time_cal_feat_001
-    - time_cal_feat_002
-    - time_cal_feat_003
-    - time_cal_feat_004
-    - time_cal_feat_005
-    - time_cal_feat_006
-    - time_cal_feat_007
-    - time_cal_feat_008
-    - time_cal_feat_009
-    - time_cal_feat_010
-    - time_cal_feat_011
-    - time_cal_feat_012
-    - time_cal_feat_013
-    - time_cal_feat_014
-    - time_cal_feat_015
-    - time_cal_feat_016
   target_column: OT
   seed: 0
   prediction_window: 6
@@ -346,27 +236,12 @@ security:
 social_good:
   data_path: data/processed_data_time_features/social_good/SocialGood_with_text_with_embeddings_Qwen-Qwen3-Embedding-8B_lag_14.csv
   date_column: date
+  calendar_frequency: month
+  seasonality_k: 3
   numeric_features:
     - OT_lag1
     - OT_lag2
     - OT_lag3
-    - time_cal_feat_000
-    - time_cal_feat_001
-    - time_cal_feat_002
-    - time_cal_feat_003
-    - time_cal_feat_004
-    - time_cal_feat_005
-    - time_cal_feat_006
-    - time_cal_feat_007
-    - time_cal_feat_008
-    - time_cal_feat_009
-    - time_cal_feat_010
-    - time_cal_feat_011
-    - time_cal_feat_012
-    - time_cal_feat_013
-    - time_cal_feat_014
-    - time_cal_feat_015
-    - time_cal_feat_016
   target_column: OT
   seed: 0
   prediction_window: 6
@@ -379,27 +254,12 @@ social_good:
 traffic:
   data_path: data/processed_data_time_features/traffic/Traffic_with_text_with_embeddings_Qwen-Qwen3-Embedding-8B_lag_14.csv
   date_column: date
+  calendar_frequency: month
+  seasonality_k: 3
   numeric_features:
     - OT_lag1
     - OT_lag2
     - OT_lag3
-    - time_cal_feat_000
-    - time_cal_feat_001
-    - time_cal_feat_002
-    - time_cal_feat_003
-    - time_cal_feat_004
-    - time_cal_feat_005
-    - time_cal_feat_006
-    - time_cal_feat_007
-    - time_cal_feat_008
-    - time_cal_feat_009
-    - time_cal_feat_010
-    - time_cal_feat_011
-    - time_cal_feat_012
-    - time_cal_feat_013
-    - time_cal_feat_014
-    - time_cal_feat_015
-    - time_cal_feat_016
   target_column: OT
   seed: 0
   prediction_window: 6

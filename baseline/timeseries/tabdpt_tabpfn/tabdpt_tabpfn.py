@@ -29,8 +29,10 @@ from fine_tuning.eval_fine_tune import (  # noqa: E402
     evaluate_rolling,
 )
 from fine_tuning.load_dataset import (  # noqa: E402
+    build_causal_fixed_origin_horizon_splits,
     build_direct_multi_horizon_dataset,
     select_direct_horizon_targets,
+    validate_direct_mode_numeric_features,
 )
 from fine_tuning.split_ts import time_split  # noqa: E402
 from tabdpt import TabDPTRegressor  # noqa: E402
@@ -104,6 +106,11 @@ def parse_cfg(raw_cfg: dict, args: argparse.Namespace) -> dict:
     cfg["prediction_window"] = int(cfg.get("prediction_window", 1))
     cfg["max_context"] = cfg.get("max_context")
     cfg["seed"] = int(cfg.get("seed", 0))
+    cfg["calendar_frequency"] = cfg.get("calendar_frequency")
+    cfg["seasonality_k"] = int(cfg.get("seasonality_k", 3))
+    cfg["seasonality_L"] = cfg.get("seasonality_L")
+    if cfg["seasonality_k"] <= 0:
+        raise ValueError("seasonality_k must be positive.")
 
     cfg["tabdpt"] = {
         "device": cfg.get("tabdpt", {}).get("device", "auto"),
@@ -140,6 +147,7 @@ def load_dataframe(cfg: dict) -> pd.DataFrame:
 def load_numeric_arrays(cfg: dict) -> tuple[np.ndarray, np.ndarray]:
     """Load pre-lagged feature rows and the one-step target column."""
     df = load_dataframe(cfg)
+    validate_direct_mode_numeric_features(cfg["numeric_features"])
     X = df[cfg["numeric_features"]].astype(np.float32).to_numpy()
     if X.shape[1] == 0:
         X = np.zeros((len(df), 1), dtype=np.float32)
@@ -263,17 +271,35 @@ def build_horizon_splits(
     y_targets: np.ndarray,
     cfg: dict,
     horizon: int,
+    timestamps: pd.Series | None = None,
 ) -> BaselineDataSplits:
     dummy_text = np.zeros((len(y_targets), 0, 0), dtype=np.float32)
-    if cfg["prediction_window"] > 1:
-        X_rows, y_targets, _ = build_direct_multi_horizon_dataset(
-            X_rows,
-            y_targets,
-            dummy_text,
-            prediction_window=cfg["prediction_window"],
-        )
-    splits = split_data(X_rows, y_targets, cfg)
-    return select_splits_for_horizon(splits, horizon)
+    if timestamps is None:
+        timestamps = pd.Series(pd.date_range("2000-01-01", periods=len(y_targets), freq="D"))
+    split_values = build_causal_fixed_origin_horizon_splits(
+        X_rows,
+        y_targets,
+        dummy_text,
+        timestamps,
+        context_ratio=float(cfg["context_ratio"]),
+        train_ratio=float(cfg["train_ratio"]),
+        val_ratio=float(cfg["val_ratio"]),
+        test_ratio=float(cfg["test_ratio"]),
+        horizon=horizon,
+        calendar_frequency=cfg.get("calendar_frequency"),
+        seasonality_k=int(cfg.get("seasonality_k", 3)),
+        seasonality_L=cfg.get("seasonality_L"),
+    )
+    return BaselineDataSplits(
+        X_context=split_values[0],
+        y_context=split_values[1],
+        X_train=split_values[3],
+        y_train=split_values[4],
+        X_val=split_values[6],
+        y_val=split_values[7],
+        X_test=split_values[9],
+        y_test=split_values[10],
+    )
 
 
 def split_data(X: np.ndarray, y: np.ndarray, cfg: dict) -> BaselineDataSplits:
@@ -323,23 +349,33 @@ def build_history_and_eval_split(
     y_val: np.ndarray,
     y_test: np.ndarray,
     split_name: str,
+    horizon: int,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Build the rolling history prefix and the eval segment for train, val, or test."""
+    if horizon <= 0:
+        raise ValueError("horizon must be positive.")
+
+    def _trim_history_tail(X_hist: np.ndarray, y_hist: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        trim = max(0, horizon - 1)
+        if trim == 0:
+            return X_hist, y_hist
+        if trim >= len(y_hist):
+            return X_hist[:0], y_hist[:0]
+        return X_hist[:-trim], y_hist[:-trim]
+
     if split_name == "train":
         return X_context, y_context, X_train, y_train
     if split_name == "val":
-        return (
+        X_hist, y_hist = _trim_history_tail(
             np.concatenate((X_context, X_train), axis=0),
             np.concatenate((y_context, y_train), axis=0),
-            X_val,
-            y_val,
         )
-    return (
+        return X_hist, y_hist, X_val, y_val
+    X_hist, y_hist = _trim_history_tail(
         np.concatenate((X_context, X_train, X_val), axis=0),
         np.concatenate((y_context, y_train, y_val), axis=0),
-        X_test,
-        y_test,
     )
+    return X_hist, y_hist, X_test, y_test
 
 
 def evaluate_rolling_estimator(
@@ -403,12 +439,13 @@ def run_horizon(
     cfg: dict,
     X_rows: np.ndarray,
     y_targets: np.ndarray,
+    timestamps: pd.Series,
     horizon: int,
     use_tabpfn: bool,
 ) -> dict[str, tuple[float, float, float]]:
     """Run one direct horizon using the same aligned dataset construction as fine-tuning."""
     print(f"\n{'=' * 16} Horizon {horizon}/{cfg['prediction_window']} {'=' * 16}")
-    splits = build_horizon_splits(X_rows, y_targets, cfg, horizon)
+    splits = build_horizon_splits(X_rows, y_targets, cfg, horizon, timestamps)
 
     tabdpt = make_tabdpt(cfg)
     tabdpt.fit(splits.X_context, splits.y_context)
@@ -430,6 +467,7 @@ def run_horizon(
             splits.y_val,
             splits.y_test,
             split_name,
+            horizon,
         )
         X_history_proc, y_history_proc, X_eval_proc, y_eval_proc = build_history_and_eval_split(
             X_context_proc,
@@ -441,6 +479,7 @@ def run_horizon(
             splits.y_val,
             splits.y_test,
             split_name,
+            horizon,
         )
 
         metrics[f"{split_name}_tabdpt"] = evaluate_rolling(
@@ -490,11 +529,12 @@ def evaluate_tabdpt_lag_combo(
     cfg: dict,
     X_rows: np.ndarray,
     y_targets: np.ndarray,
+    timestamps: pd.Series,
 ) -> tuple[float, dict[int, tuple[float, float, float]]]:
     per_horizon_metrics: dict[int, tuple[float, float, float]] = {}
     maes: list[float] = []
     for horizon in range(1, cfg["prediction_window"] + 1):
-        metrics = run_horizon(cfg, X_rows, y_targets, horizon, use_tabpfn=False)
+        metrics = run_horizon(cfg, X_rows, y_targets, timestamps, horizon, use_tabpfn=False)
         val_metrics = metrics["val_tabdpt"]
         per_horizon_metrics[horizon] = val_metrics
         maes.append(val_metrics[0])
@@ -522,6 +562,7 @@ def main() -> None:
         np.random.seed(cfg["seed"])
         torch.manual_seed(cfg["seed"])
         df = load_dataframe(cfg)
+        timestamps = df[cfg["date_column"]].reset_index(drop=True) if cfg.get("date_column") else pd.Series(range(len(df)))
 
         search_target_lags = parse_lag_values(args.search_target_lags)
         search_covariate_lags = parse_lag_values(args.search_covariate_lags)
@@ -545,7 +586,16 @@ def main() -> None:
                         X_candidate, y_candidate = build_lagged_arrays(
                             df, cfg, target_lag_days=target_lag, covariate_lag_days=covariate_lag
                         )
-                        mean_mae, _ = evaluate_tabdpt_lag_combo(cfg, X_candidate, y_candidate)
+                        valid_mask = pd.Series(True, index=df.index)
+                        max_lag = max(target_lag, covariate_lag)
+                        if max_lag > 0:
+                            valid_mask.iloc[:max_lag] = False
+                        mean_mae, _ = evaluate_tabdpt_lag_combo(
+                            cfg,
+                            X_candidate,
+                            y_candidate,
+                            df.loc[valid_mask, cfg["date_column"]].reset_index(drop=True),
+                        )
                         print(f"mean_val_tabdpt_mae={mean_mae:.6f}")
                         if mean_mae < best_mae:
                             best_mae = mean_mae
@@ -566,6 +616,8 @@ def main() -> None:
             X, y = build_lagged_arrays(
                 df, cfg, target_lag_days=target_lag, covariate_lag_days=covariate_lag
             )
+            max_lag = max(target_lag, covariate_lag)
+            timestamps = df.loc[max_lag:, cfg["date_column"]].reset_index(drop=True)
         else:
             X, y = load_numeric_arrays(cfg)
 
@@ -583,7 +635,7 @@ def main() -> None:
                 print(f"tabpfn_cache_dir={cfg['tabpfn']['cache_dir']}")
 
         per_horizon = [
-            run_horizon(cfg, X, y, horizon, not args.skip_tabpfn)
+            run_horizon(cfg, X, y, timestamps, horizon, not args.skip_tabpfn)
             for horizon in range(1, cfg["prediction_window"] + 1)
         ]
 

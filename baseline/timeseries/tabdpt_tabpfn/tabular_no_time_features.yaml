@@ -19,7 +19,7 @@ bitcoin:
     - Adj_Close_lag3
   target_column: Adj_Close
   seed: 0
-  prediction_window: 6
+  prediction_window: 12
   max_rows: 1000
   context_ratio: 0.2
   train_ratio: 0.5
@@ -40,7 +40,7 @@ agriculture:
     - Retail-wholesale spread for broiler composite_lag3
   target_column: OT
   seed: 0
-  prediction_window: 6
+  prediction_window: 12
   context_ratio: 0.2
   train_ratio: 0.5
   val_ratio: 0.1
@@ -76,7 +76,7 @@ climate:
     - StatisticFormatID_lag3
   target_column: OT
   seed: 0
-  prediction_window: 6
+  prediction_window: 12
   context_ratio: 0.2
   train_ratio: 0.5
   val_ratio: 0.1
@@ -99,7 +99,7 @@ economy:
     - OT_lag3
   target_column: OT
   seed: 0
-  prediction_window: 6
+  prediction_window: 12
   context_ratio: 0.2
   train_ratio: 0.5
   val_ratio: 0.1
@@ -139,7 +139,7 @@ energy:
     - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag3
   target_column: OT
   seed: 0
-  prediction_window: 6
+  prediction_window: 12
   context_ratio: 0.2
   train_ratio: 0.5
   val_ratio: 0.1
@@ -158,7 +158,7 @@ environment:
     - Number of Sites Reporting_lag3
   target_column: OT
   seed: 0
-  prediction_window: 6
+  prediction_window: 12
   context_ratio: 0.2
   train_ratio: 0.5
   val_ratio: 0.1
@@ -198,7 +198,7 @@ health_us:
     - TOTAL PATIENTS_lag3
   target_column: OT
   seed: 0
-  prediction_window: 6
+  prediction_window: 12
   context_ratio: 0.2
   train_ratio: 0.5
   val_ratio: 0.1
@@ -214,7 +214,7 @@ security:
     - OT_lag3
   target_column: OT
   seed: 0
-  prediction_window: 6
+  prediction_window: 12
   context_ratio: 0.2
   train_ratio: 0.5
   val_ratio: 0.1
@@ -230,7 +230,7 @@ social_good:
     - OT_lag3
   target_column: OT
   seed: 0
-  prediction_window: 6
+  prediction_window: 12
   context_ratio: 0.2
   train_ratio: 0.5
   val_ratio: 0.1
@@ -246,7 +246,7 @@ traffic:
     - OT_lag3
   target_column: OT
   seed: 0
-  prediction_window: 6
+  prediction_window: 12
   context_ratio: 0.2
   train_ratio: 0.5
   val_ratio: 0.1
