@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 import torch
 import yaml
+from sklearn.preprocessing import MinMaxScaler, RobustScaler, StandardScaler
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -26,7 +27,6 @@ from fine_tuning.eval_fine_tune import (  # noqa: E402
     _build_rolling_train_step,
     _compute_metrics,
     _format_metrics,
-    evaluate_rolling,
 )
 from fine_tuning.load_dataset import (  # noqa: E402
     build_causal_fixed_origin_horizon_splits,
@@ -36,6 +36,7 @@ from fine_tuning.load_dataset import (  # noqa: E402
 )
 from fine_tuning.split_ts import time_split  # noqa: E402
 from tabdpt import TabDPTRegressor  # noqa: E402
+from tabdpt.utils import pad_x  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,105 @@ class BaselineDataSplits:
     y_val: np.ndarray
     X_test: np.ndarray
     y_test: np.ndarray
+
+
+def build_normalizer(normalizer_name: str | None):
+    match normalizer_name:
+        case None:
+            return None
+        case "standard":
+            return StandardScaler()
+        case "minmax":
+            return MinMaxScaler()
+        case "robust":
+            return RobustScaler()
+        case _:
+            raise ValueError(f"Unsupported normalizer: {normalizer_name}")
+
+
+def normalize_feature_splits(
+    splits: BaselineDataSplits,
+    normalizer_name: str | None,
+) -> BaselineDataSplits:
+    if normalizer_name is None:
+        return splits
+
+    X_fit = np.concatenate((splits.X_context, splits.X_train), axis=0)
+    if len(X_fit) == 0:
+        raise ValueError("Cannot fit feature normalizer on an empty training split.")
+
+    X_context = splits.X_context.astype(np.float64, copy=True)
+    X_train = splits.X_train.astype(np.float64, copy=True)
+    X_val = splits.X_val.astype(np.float64, copy=True)
+    X_test = splits.X_test.astype(np.float64, copy=True)
+
+    # Normalize each feature column independently using stats fit on context+train only.
+    for col_idx in range(X_fit.shape[1]):
+        scaler = build_normalizer(normalizer_name)
+        fit_column = X_fit[:, [col_idx]].astype(np.float64, copy=False)
+        scaler.fit(fit_column)
+        X_context[:, [col_idx]] = scaler.transform(splits.X_context[:, [col_idx]].astype(np.float64, copy=False))
+        X_train[:, [col_idx]] = scaler.transform(splits.X_train[:, [col_idx]].astype(np.float64, copy=False))
+        X_val[:, [col_idx]] = scaler.transform(splits.X_val[:, [col_idx]].astype(np.float64, copy=False))
+        X_test[:, [col_idx]] = scaler.transform(splits.X_test[:, [col_idx]].astype(np.float64, copy=False))
+
+    return BaselineDataSplits(
+        X_context=X_context.astype(np.float32, copy=False),
+        y_context=splits.y_context,
+        X_train=X_train.astype(np.float32, copy=False),
+        y_train=splits.y_train,
+        X_val=X_val.astype(np.float32, copy=False),
+        y_val=splits.y_val,
+        X_test=X_test.astype(np.float32, copy=False),
+        y_test=splits.y_test,
+    )
+
+
+def normalize_target_splits(
+    splits: BaselineDataSplits,
+    normalizer_name: str | None,
+) -> tuple[BaselineDataSplits, object | None]:
+    if normalizer_name is None:
+        return splits, None
+
+    y_fit = np.concatenate((splits.y_context, splits.y_train), axis=0)
+    if len(y_fit) == 0:
+        raise ValueError("Cannot fit target normalizer on an empty training split.")
+
+    scaler = build_normalizer(normalizer_name)
+    scaler.fit(y_fit.reshape(-1, 1).astype(np.float64, copy=False))
+
+    def _transform(y: np.ndarray) -> np.ndarray:
+        return scaler.transform(y.reshape(-1, 1).astype(np.float64, copy=False)).reshape(-1).astype(np.float32, copy=False)
+
+    return (
+        BaselineDataSplits(
+            X_context=splits.X_context,
+            y_context=_transform(splits.y_context),
+            X_train=splits.X_train,
+            y_train=_transform(splits.y_train),
+            X_val=splits.X_val,
+            y_val=_transform(splits.y_val),
+            X_test=splits.X_test,
+            y_test=_transform(splits.y_test),
+        ),
+        scaler,
+    )
+
+
+def inverse_transform_targets(y: np.ndarray, target_scaler: object | None) -> np.ndarray:
+    if target_scaler is None:
+        return y.astype(np.float32, copy=False)
+    return target_scaler.inverse_transform(y.reshape(-1, 1).astype(np.float64, copy=False)).reshape(-1).astype(np.float32, copy=False)
+
+
+def _format_dual_metrics(
+    label: str,
+    normalized_metrics: tuple[float, float, float],
+    real_metrics: tuple[float, float, float],
+) -> None:
+    _format_metrics(f"{label} [normalized]", *normalized_metrics)
+    _format_metrics(f"{label} [real]", *real_metrics)
 
 
 def resolve_config_path(config_path: str) -> Path:
@@ -102,6 +202,7 @@ def parse_cfg(raw_cfg: dict, args: argparse.Namespace) -> dict:
     cfg["numeric_features"] = list(
         cfg.get("numeric_features") or cfg.get("features") or cfg.get("feature_columns") or []
     )
+    cfg["normalizer"] = cfg.get("normalizer", "standard")
     cfg["target_column"] = str(cfg.get("target_column") or cfg.get("target"))
     cfg["prediction_window"] = int(cfg.get("prediction_window", 1))
     cfg["max_context"] = cfg.get("max_context")
@@ -290,7 +391,7 @@ def build_horizon_splits(
         seasonality_k=int(cfg.get("seasonality_k", 3)),
         seasonality_L=cfg.get("seasonality_L"),
     )
-    return BaselineDataSplits(
+    splits = BaselineDataSplits(
         X_context=split_values[0],
         y_context=split_values[1],
         X_train=split_values[3],
@@ -300,6 +401,7 @@ def build_horizon_splits(
         X_test=split_values[9],
         y_test=split_values[10],
     )
+    return normalize_feature_splits(splits, cfg["normalizer"])
 
 
 def split_data(X: np.ndarray, y: np.ndarray, cfg: dict) -> BaselineDataSplits:
@@ -313,7 +415,7 @@ def split_data(X: np.ndarray, y: np.ndarray, cfg: dict) -> BaselineDataSplits:
         val_ratio=float(cfg["val_ratio"]),
         test_ratio=float(cfg["test_ratio"]),
     )
-    return BaselineDataSplits(
+    splits = BaselineDataSplits(
         X_context=split_values[0],
         y_context=split_values[1],
         X_train=split_values[3],
@@ -323,6 +425,7 @@ def split_data(X: np.ndarray, y: np.ndarray, cfg: dict) -> BaselineDataSplits:
         X_test=split_values[9],
         y_test=split_values[10],
     )
+    return normalize_feature_splits(splits, cfg["normalizer"])
 
 
 def preprocess_features(reg: TabDPTRegressor, X: np.ndarray) -> np.ndarray:
@@ -385,10 +488,12 @@ def evaluate_rolling_estimator(
     y_context: np.ndarray,
     X_eval: np.ndarray,
     y_eval: np.ndarray,
+    y_eval_real: np.ndarray,
     max_context: int | None,
     horizon: int,
+    target_scaler: object | None,
     label: str,
-) -> tuple[float, float, float]:
+) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
     """Refit the estimator at every rolling step and predict one row ahead."""
     preds = np.zeros(len(y_eval), dtype=np.float32)
     for idx in range(len(y_eval)):
@@ -406,13 +511,69 @@ def evaluate_rolling_estimator(
         estimator.fit(X_train_step, y_train_step)
         preds[idx] = np.asarray(estimator.predict(X_eval[idx:idx + 1]), dtype=np.float32).reshape(-1)[0]
 
-    metrics = _compute_metrics(y_eval, preds)
-    _format_metrics(label, *metrics)
-    return metrics
+    normalized_metrics = _compute_metrics(y_eval, preds)
+    real_preds = inverse_transform_targets(preds, target_scaler)
+    real_metrics = _compute_metrics(y_eval_real, real_preds)
+    _format_dual_metrics(label, normalized_metrics, real_metrics)
+    return normalized_metrics, real_metrics
+
+
+def evaluate_rolling_tabdpt(
+    reg: TabDPTRegressor,
+    *,
+    X_context_proc: np.ndarray,
+    y_context: np.ndarray,
+    X_eval_proc: np.ndarray,
+    y_eval: np.ndarray,
+    y_eval_real: np.ndarray,
+    max_context: int | None,
+    horizon: int,
+    target_scaler: object | None,
+    label: str,
+) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+    reg.model.eval()
+    preds = np.zeros(len(y_eval), dtype=np.float32)
+    with torch.no_grad():
+        for idx in range(len(y_eval)):
+            X_train_step, y_train_step, _ = _build_rolling_train_step(
+                X_context_proc=X_context_proc,
+                y_context=y_context,
+                text_context=None,
+                X_eval_proc=X_eval_proc,
+                y_eval=y_eval,
+                text_eval=None,
+                idx=idx,
+                horizon=horizon,
+                max_context=max_context,
+            )
+            X_test_step = X_eval_proc[idx:idx + 1]
+
+            X_train_tensor = torch.tensor(X_train_step, dtype=torch.float32, device=reg.device).unsqueeze(0)
+            X_train_tensor = pad_x(X_train_tensor, reg.max_features)
+            X_test_tensor = torch.tensor(X_test_step, dtype=torch.float32, device=reg.device).unsqueeze(0)
+            X_test_tensor = pad_x(X_test_tensor, reg.max_features)
+            y_context_tensor = torch.tensor(y_train_step, dtype=torch.float32, device=reg.device).unsqueeze(0)
+
+            pred = reg.model(
+                x_src=torch.cat([X_train_tensor, X_test_tensor], dim=1),
+                y_src=y_context_tensor.unsqueeze(-1),
+                task="reg",
+                text_train=None,
+                text_test=None,
+            )
+            pred, _, _ = pred
+            preds[idx] = pred.squeeze(-1).reshape(-1).detach().cpu().numpy()[0]
+
+    normalized_metrics = _compute_metrics(y_eval, preds)
+    real_preds = inverse_transform_targets(preds, target_scaler)
+    real_metrics = _compute_metrics(y_eval_real, real_preds)
+    _format_dual_metrics(label, normalized_metrics, real_metrics)
+    return normalized_metrics, real_metrics
 
 
 def make_tabdpt(cfg: dict) -> TabDPTRegressor:
     return TabDPTRegressor(
+        normalizer=None,
         device=resolve_device(cfg["tabdpt"]["device"]),
         model_weight_path=cfg["tabdpt"]["model_weight_path"],
         use_flash=cfg["tabdpt"]["use_flash"],
@@ -445,7 +606,8 @@ def run_horizon(
 ) -> dict[str, tuple[float, float, float]]:
     """Run one direct horizon using the same aligned dataset construction as fine-tuning."""
     print(f"\n{'=' * 16} Horizon {horizon}/{cfg['prediction_window']} {'=' * 16}")
-    splits = build_horizon_splits(X_rows, y_targets, cfg, horizon, timestamps)
+    raw_splits = build_horizon_splits(X_rows, y_targets, cfg, horizon, timestamps)
+    splits, target_scaler = normalize_target_splits(raw_splits, cfg["normalizer"])
 
     tabdpt = make_tabdpt(cfg)
     tabdpt.fit(splits.X_context, splits.y_context)
@@ -469,6 +631,18 @@ def run_horizon(
             split_name,
             horizon,
         )
+        _, _, _, y_eval_real = build_history_and_eval_split(
+            raw_splits.X_context,
+            raw_splits.X_train,
+            raw_splits.X_val,
+            raw_splits.X_test,
+            raw_splits.y_context,
+            raw_splits.y_train,
+            raw_splits.y_val,
+            raw_splits.y_test,
+            split_name,
+            horizon,
+        )
         X_history_proc, y_history_proc, X_eval_proc, y_eval_proc = build_history_and_eval_split(
             X_context_proc,
             X_train_proc,
@@ -482,31 +656,36 @@ def run_horizon(
             horizon,
         )
 
-        metrics[f"{split_name}_tabdpt"] = evaluate_rolling(
+        tabdpt_normalized, tabdpt_real = evaluate_rolling_tabdpt(
             tabdpt,
             X_context_proc=X_history_proc,
             y_context=y_history_proc,
-            text_context=None,
             X_eval_proc=X_eval_proc,
             y_eval=y_eval_proc,
-            text_eval=None,
-            use_text=False,
-            label=f"{split_name.title()} TabDPT",
+            y_eval_real=y_eval_real,
             max_context=cfg["max_context"],
             horizon=horizon,
+            target_scaler=target_scaler,
+            label=f"{split_name.title()} TabDPT",
         )
+        metrics[f"{split_name}_tabdpt_normalized"] = tabdpt_normalized
+        metrics[f"{split_name}_tabdpt"] = tabdpt_real
 
         if use_tabpfn:
-            metrics[f"{split_name}_tabpfn"] = evaluate_rolling_estimator(
+            tabpfn_normalized, tabpfn_real = evaluate_rolling_estimator(
                 make_tabpfn(cfg),
-                X_context=X_history,
+                X_context=X_history_proc,
                 y_context=y_history,
-                X_eval=X_eval,
-                y_eval=y_eval,
+                X_eval=X_eval_proc,
+                y_eval=y_eval_proc,
+                y_eval_real=y_eval_real,
                 max_context=cfg["max_context"],
                 horizon=horizon,
+                target_scaler=target_scaler,
                 label=f"{split_name.title()} TabPFN",
             )
+            metrics[f"{split_name}_tabpfn_normalized"] = tabpfn_normalized
+            metrics[f"{split_name}_tabpfn"] = tabpfn_real
 
     return metrics
 
