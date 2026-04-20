@@ -1,0 +1,24 @@
+source_csv_path: /home/yuyan/tabdpt_mz/data/source_data/bitcoin/v3/bitcoin_gpt_analyzed.csv
+target_output_path: /home/yuyan/tabdpt_mz/data/processed_data/bitcoin/v3/bitcoin_gpt_analyzed_embedding.csv
+
+text_columns:
+  - summary_gpt-5.2
+
+numerical_columns:
+  - Open
+  - High
+  - Low
+  - Close
+  - Adj_Close
+  - Volume
+
+target_columns:
+  - Close
+
+date_column: Date
+model_name: Qwen/Qwen3-Embedding-8B
+text_lag_days: 14
+numerical_lag_days: 28
+batch_size: 8
+max_length: 1024
+na_text: n/a
