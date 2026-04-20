@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import sys
 from pathlib import Path
 
@@ -18,7 +20,7 @@ try:
     from .batch_mode_utils import (
         BatchSlotMetrics,
         batch_forecast_records,
-        build_fixed_horizon_future_queries,
+        build_terminal_available_batch_queries,
         evaluate_batch_slot_metrics,
         records_to_csv_rows,
         resolve_batch_horizon,
@@ -41,7 +43,7 @@ except ImportError:
     from batch_mode_utils import (
         BatchSlotMetrics,
         batch_forecast_records,
-        build_fixed_horizon_future_queries,
+        build_terminal_available_batch_queries,
         evaluate_batch_slot_metrics,
         records_to_csv_rows,
         resolve_batch_horizon,
@@ -117,6 +119,11 @@ def _future_support_from_prepared(prepared_trial) -> tuple[np.ndarray, np.ndarra
     return X_support, y_support, text_support
 
 
+def _call_quietly(fn, /, *args, **kwargs):
+    with contextlib.redirect_stdout(io.StringIO()):
+        return fn(*args, **kwargs)
+
+
 def run_fixed_horizon_batch(run_cfg, *, output_csv: str | None = None) -> dict[str, object]:
     batch_horizon = resolve_batch_horizon(run_cfg.prediction_window)
     print(f"batch_horizon={batch_horizon}")
@@ -126,9 +133,9 @@ def run_fixed_horizon_batch(run_cfg, *, output_csv: str | None = None) -> dict[s
     fine_tune_outcome = fine_tune_prepared_trial(prepared_trial, tuning_cfg=run_cfg.tuning)
     reg = prepared_trial.reg
 
-    print("\n== Overall Metrics ==")
     val_inputs = _prepared_eval_inputs(prepared_trial, split_name="val")
-    val_metrics = evaluate_rolling(
+    val_metrics = _call_quietly(
+        evaluate_rolling,
         reg,
         X_context_proc=val_inputs[0],
         y_context=val_inputs[1],
@@ -144,7 +151,8 @@ def run_fixed_horizon_batch(run_cfg, *, output_csv: str | None = None) -> dict[s
         horizon=batch_horizon,
     )
     test_inputs = _prepared_eval_inputs(prepared_trial, split_name="test")
-    test_metrics = evaluate_rolling(
+    test_metrics = _call_quietly(
+        evaluate_rolling,
         reg,
         X_context_proc=test_inputs[0],
         y_context=test_inputs[1],
@@ -206,25 +214,22 @@ def run_fixed_horizon_batch(run_cfg, *, output_csv: str | None = None) -> dict[s
     )
     _print_slot_metrics("Validation Slot Metrics", val_slot_metrics)
     _print_slot_metrics("Test Slot Metrics", test_slot_metrics)
+    print("\n== Overall Metrics ==")
+    _format_dual_metrics("Val (with text attn)", val_metrics[0], val_metrics[1])
+    _format_dual_metrics("Test (with text attn)", test_metrics[0], test_metrics[1])
 
-    df = _load_batch_dataframe(run_cfg)
     X_raw, y_raw, text_raw, timestamps = load_fine_tune_arrays(run_cfg)
     if timestamps is None:
         raise ValueError("Batch mode requires timestamps to generate future target calendars.")
-    query_bundle = build_fixed_horizon_future_queries(
-        df=df,
+    query_bundle = build_terminal_available_batch_queries(
         X_raw=X_raw,
         y_raw=y_raw,
         text=text_raw,
         timestamps=pd.Series(pd.to_datetime(timestamps)),
-        numeric_features=run_cfg.numeric_features,
         calendar_frequency=run_cfg.calendar_frequency,
         seasonality_k=run_cfg.seasonality_k,
         seasonality_L=run_cfg.seasonality_L,
         horizon=batch_horizon,
-        embedding_lags=run_cfg.embedding_lags,
-        embedding_columns=run_cfg.embedding_columns,
-        embedding_column_template=run_cfg.embedding_column_template,
     )
     X_query_proc = preprocess_features(
         reg,
@@ -250,7 +255,7 @@ def run_fixed_horizon_batch(run_cfg, *, output_csv: str | None = None) -> dict[s
         model_name="tuned_text",
     )
 
-    print("\n== Future Batch Forecast ==")
+    print("\n== Final Available Batch Forecast ==")
     for record in forecast_records:
         print(
             f"slot {record.slot:02d} | source_index={record.source_index} "
@@ -282,7 +287,7 @@ def run_fixed_horizon_batch(run_cfg, *, output_csv: str | None = None) -> dict[s
             records_to_csv_rows(
                 forecast_records=forecast_records,
                 slot_metrics=[],
-                split_name="future",
+                split_name="final_available",
             )
         )
         output_path = Path(output_csv).expanduser().resolve()

@@ -365,6 +365,62 @@ def build_fixed_horizon_future_queries(
     )
 
 
+def build_terminal_available_batch_queries(
+    *,
+    X_raw: np.ndarray,
+    y_raw: np.ndarray,
+    text: np.ndarray | None,
+    timestamps: pd.Series,
+    calendar_frequency: str | None,
+    seasonality_k: int,
+    seasonality_L: int | None,
+    horizon: int,
+) -> BatchQueryBundle:
+    if horizon <= 0:
+        raise ValueError("horizon must be positive.")
+    if len(X_raw) != len(y_raw) or len(timestamps) != len(y_raw) or (text is not None and len(text) != len(y_raw)):
+        raise ValueError("X_raw, y_raw, text, and timestamps must describe the same number of rows.")
+
+    n_rows = len(y_raw)
+    if n_rows == 0:
+        raise ValueError("Cannot build terminal batch queries from an empty dataset.")
+
+    source_features, _ = build_source_feature_block(
+        X_raw,
+        y_raw,
+        seasonality_k=seasonality_k,
+        seasonality_L=seasonality_L,
+    )
+    timestamps = pd.Series(pd.to_datetime(timestamps), copy=False).reset_index(drop=True)
+    frequency = calendar_frequency or infer_calendar_frequency(timestamps)
+    target_calendar = generate_calendar_features(timestamps, frequency).astype(np.float32, copy=False)
+
+    start_source = max(0, n_rows - horizon - 1)
+    candidate_sources = np.arange(start_source, n_rows, dtype=np.int64)
+    target_indices = candidate_sources + horizon - 1
+    valid_mask = target_indices < n_rows
+    source_indices = candidate_sources[valid_mask]
+    target_indices = target_indices[valid_mask]
+    if source_indices.size == 0:
+        raise ValueError(
+            f"No terminal in-dataset batch queries are available for horizon {horizon} and {n_rows} rows."
+        )
+
+    X_query_raw = np.concatenate(
+        [source_features[source_indices], target_calendar[target_indices]],
+        axis=1,
+    ).astype(np.float32, copy=False)
+    text_query = None if text is None else text[source_indices].astype(np.float32, copy=False)
+    return BatchQueryBundle(
+        batch_horizon=int(source_indices.size),
+        source_indices=source_indices,
+        source_timestamps=timestamps.iloc[source_indices].reset_index(drop=True),
+        target_timestamps=timestamps.iloc[target_indices].reset_index(drop=True),
+        X_query_raw=X_query_raw,
+        text_query=text_query,
+    )
+
+
 def _trim_support_tail(
     X_support: np.ndarray,
     y_support: np.ndarray,

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import sys
 from pathlib import Path
 
@@ -10,7 +12,7 @@ import numpy as np
 import pandas as pd
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parents[3]
+REPO_ROOT = SCRIPT_DIR.parents[2]
 for path in (SCRIPT_DIR, REPO_ROOT, REPO_ROOT / "src"):
     path_str = str(path)
     if path_str not in sys.path:
@@ -19,7 +21,7 @@ for path in (SCRIPT_DIR, REPO_ROOT, REPO_ROOT / "src"):
 from fine_tuning.batch_mode_utils import (
     BatchSlotMetrics,
     batch_forecast_records,
-    build_fixed_horizon_future_queries,
+    build_terminal_available_batch_queries,
     evaluate_batch_slot_metrics,
     predict_estimator_batch,
     predict_tabdpt_batch,
@@ -28,6 +30,7 @@ from fine_tuning.batch_mode_utils import (
 )
 from tabdpt_tabpfn import (
     _format_dual_metrics,
+    _format_metrics,
     build_history_and_eval_split,
     build_horizon_splits,
     evaluate_rolling_estimator,
@@ -44,16 +47,6 @@ from tabdpt_tabpfn import (
 )
 
 
-def _print_slot_metrics(header: str, metrics: list[BatchSlotMetrics]) -> None:
-    print(f"\n{header}")
-    for metric in metrics:
-        _format_dual_metrics(
-            f"slot {metric.slot:02d} (n={metric.count})",
-            metric.normalized,
-            metric.real,
-        )
-
-
 def _model_rows(rows: list[dict[str, object]], *, model_name: str) -> list[dict[str, object]]:
     for row in rows:
         row["model_name"] = model_name
@@ -66,9 +59,13 @@ def _future_support(X_context_proc, X_train_proc, X_val_proc, X_test_proc, split
     return X_support, y_support
 
 
+def _call_quietly(fn, /, *args, **kwargs):
+    with contextlib.redirect_stdout(io.StringIO()):
+        return fn(*args, **kwargs)
+
+
 def run_fixed_horizon_batch(cfg: dict, *, use_tabpfn: bool, output_csv: str | None = None) -> dict[str, object]:
     batch_horizon = resolve_batch_horizon(int(cfg["prediction_window"]))
-    print(f"batch_horizon={batch_horizon}")
 
     df = load_dataframe(cfg)
     timestamps = df[cfg["date_column"]].reset_index(drop=True) if cfg.get("date_column") else None
@@ -87,7 +84,6 @@ def run_fixed_horizon_batch(cfg: dict, *, use_tabpfn: bool, output_csv: str | No
     X_val_proc = preprocess_features(tabdpt, splits.X_val)
     X_test_proc = preprocess_features(tabdpt, splits.X_test)
 
-    print("\n== Overall Metrics ==")
     val_hist = build_history_and_eval_split(
         X_context_proc,
         X_train_proc,
@@ -137,7 +133,8 @@ def run_fixed_horizon_batch(cfg: dict, *, use_tabpfn: bool, output_csv: str | No
         batch_horizon,
     )
 
-    tabdpt_val_metrics = evaluate_rolling_tabdpt(
+    tabdpt_val_metrics = _call_quietly(
+        evaluate_rolling_tabdpt,
         tabdpt,
         X_context_proc=val_hist[0],
         y_context=val_hist[1],
@@ -149,7 +146,8 @@ def run_fixed_horizon_batch(cfg: dict, *, use_tabpfn: bool, output_csv: str | No
         target_scaler=target_scaler,
         label="Val TabDPT",
     )
-    tabdpt_test_metrics = evaluate_rolling_tabdpt(
+    tabdpt_test_metrics = _call_quietly(
+        evaluate_rolling_tabdpt,
         tabdpt,
         X_context_proc=test_hist[0],
         y_context=test_hist[1],
@@ -164,7 +162,8 @@ def run_fixed_horizon_batch(cfg: dict, *, use_tabpfn: bool, output_csv: str | No
     tabpfn_val_metrics = None
     tabpfn_test_metrics = None
     if use_tabpfn:
-        tabpfn_val_metrics = evaluate_rolling_estimator(
+        tabpfn_val_metrics = _call_quietly(
+            evaluate_rolling_estimator,
             make_tabpfn(cfg),
             X_context=val_hist[0],
             y_context=val_hist[1],
@@ -176,7 +175,8 @@ def run_fixed_horizon_batch(cfg: dict, *, use_tabpfn: bool, output_csv: str | No
             target_scaler=target_scaler,
             label="Val TabPFN",
         )
-        tabpfn_test_metrics = evaluate_rolling_estimator(
+        tabpfn_test_metrics = _call_quietly(
+            evaluate_rolling_estimator,
             make_tabpfn(cfg),
             X_context=test_hist[0],
             y_context=test_hist[1],
@@ -225,9 +225,6 @@ def run_fixed_horizon_batch(cfg: dict, *, use_tabpfn: bool, output_csv: str | No
         ),
         inverse_transform_fn=lambda arr: inverse_transform_targets(arr, target_scaler),
     )
-    _print_slot_metrics("Validation Slot Metrics | TabDPT", tabdpt_val_slot_metrics)
-    _print_slot_metrics("Test Slot Metrics | TabDPT", tabdpt_test_slot_metrics)
-
     tabpfn_val_slot_metrics = None
     tabpfn_test_slot_metrics = None
     if use_tabpfn:
@@ -265,16 +262,18 @@ def run_fixed_horizon_batch(cfg: dict, *, use_tabpfn: bool, output_csv: str | No
             ),
             inverse_transform_fn=lambda arr: inverse_transform_targets(arr, target_scaler),
         )
-        _print_slot_metrics("Validation Slot Metrics | TabPFN", tabpfn_val_slot_metrics)
-        _print_slot_metrics("Test Slot Metrics | TabPFN", tabpfn_test_slot_metrics)
+    print(f"\n{'=' * 16} Horizon {batch_horizon}/{cfg['prediction_window']} {'=' * 16}")
+    _format_dual_metrics("Val TabDPT", tabdpt_val_metrics[0], tabdpt_val_metrics[1])
+    _format_dual_metrics("Test TabDPT", tabdpt_test_metrics[0], tabdpt_test_metrics[1])
+    if use_tabpfn and tabpfn_val_metrics is not None and tabpfn_test_metrics is not None:
+        _format_dual_metrics("Val TabPFN", tabpfn_val_metrics[0], tabpfn_val_metrics[1])
+        _format_dual_metrics("Test TabPFN", tabpfn_test_metrics[0], tabpfn_test_metrics[1])
 
-    query_bundle = build_fixed_horizon_future_queries(
-        df=df,
+    query_bundle = build_terminal_available_batch_queries(
         X_raw=X_raw,
         y_raw=y_raw,
         text=None,
         timestamps=pd.Series(pd.to_datetime(timestamps)),
-        numeric_features=cfg["numeric_features"],
         calendar_frequency=cfg.get("calendar_frequency"),
         seasonality_k=int(cfg.get("seasonality_k", 3)),
         seasonality_L=cfg.get("seasonality_L"),
@@ -298,14 +297,6 @@ def run_fixed_horizon_batch(cfg: dict, *, use_tabpfn: bool, output_csv: str | No
         model_name="tabdpt",
     )
 
-    print("\n== Future Batch Forecast | TabDPT ==")
-    for record in tabdpt_forecasts:
-        print(
-            f"slot {record.slot:02d} | source_index={record.source_index} "
-            f"source_ts={record.source_timestamp} -> target_ts={record.target_timestamp} "
-            f"| prediction={record.prediction_real:.4f}"
-        )
-
     tabpfn_forecasts = None
     if use_tabpfn:
         tabpfn_future_normalized = predict_estimator_batch(
@@ -321,13 +312,6 @@ def run_fixed_horizon_batch(cfg: dict, *, use_tabpfn: bool, output_csv: str | No
             query_bundle=query_bundle,
             model_name="tabpfn",
         )
-        print("\n== Future Batch Forecast | TabPFN ==")
-        for record in tabpfn_forecasts:
-            print(
-                f"slot {record.slot:02d} | source_index={record.source_index} "
-                f"source_ts={record.source_timestamp} -> target_ts={record.target_timestamp} "
-                f"| prediction={record.prediction_real:.4f}"
-            )
 
     if output_csv is not None:
         rows: list[dict[str, object]] = []
@@ -359,7 +343,7 @@ def run_fixed_horizon_batch(cfg: dict, *, use_tabpfn: bool, output_csv: str | No
             records_to_csv_rows(
                 forecast_records=tabdpt_forecasts,
                 slot_metrics=[],
-                split_name="future",
+                split_name="final_available",
             )
         )
         if use_tabpfn and tabpfn_val_metrics is not None and tabpfn_test_metrics is not None:
@@ -391,7 +375,7 @@ def run_fixed_horizon_batch(cfg: dict, *, use_tabpfn: bool, output_csv: str | No
                 records_to_csv_rows(
                     forecast_records=tabpfn_forecasts or [],
                     slot_metrics=[],
-                    split_name="future",
+                    split_name="final_available",
                 )
             )
         output_path = Path(output_csv).expanduser().resolve()
@@ -399,8 +383,21 @@ def run_fixed_horizon_batch(cfg: dict, *, use_tabpfn: bool, output_csv: str | No
         pd.DataFrame(rows).to_csv(output_path, index=False)
         print(f"\noutput_csv={output_path}")
 
+    summary: dict[str, tuple[float, float, float]] = {
+        "val_tabdpt": tabdpt_val_metrics[1],
+        "test_tabdpt": tabdpt_test_metrics[1],
+    }
+    if use_tabpfn and tabpfn_val_metrics is not None and tabpfn_test_metrics is not None:
+        summary["val_tabpfn"] = tabpfn_val_metrics[1]
+        summary["test_tabpfn"] = tabpfn_test_metrics[1]
+
+    print("\nSummary")
+    for name in sorted(summary):
+        _format_metrics(name, *summary[name])
+
     return {
         "batch_horizon": batch_horizon,
+        "summary": summary,
         "tabdpt_val_metrics": tabdpt_val_metrics,
         "tabdpt_test_metrics": tabdpt_test_metrics,
         "tabdpt_val_slot_metrics": tabdpt_val_slot_metrics,
@@ -427,12 +424,28 @@ def main() -> None:
     args = parser.parse_args()
 
     config_file, raw_cfgs = read_cfg(args.config, args.dataset)
+    summaries: list[tuple[str, dict[str, tuple[float, float, float]]]] = []
     for dataset_name, raw_cfg in raw_cfgs.items():
         cfg = parse_cfg(raw_cfg, args)
         np.random.seed(cfg["seed"])
         print(dataset_name)
         print(f"config={config_file}")
-        run_fixed_horizon_batch(cfg, use_tabpfn=not args.skip_tabpfn, output_csv=args.output_csv)
+        print(f"prediction_window={cfg['prediction_window']}")
+        print(f"max_context={cfg['max_context']}")
+        if not args.skip_tabpfn:
+            if cfg["tabpfn"]["model_path"]:
+                print(f"tabpfn_model_path={cfg['tabpfn']['model_path']}")
+            else:
+                print(f"tabpfn_cache_dir={cfg['tabpfn']['cache_dir']}")
+        result = run_fixed_horizon_batch(cfg, use_tabpfn=not args.skip_tabpfn, output_csv=args.output_csv)
+        summaries.append((dataset_name, result["summary"]))
+        print()
+
+    print("summary")
+    for dataset_name, summary in summaries:
+        print(dataset_name)
+        for name in sorted(summary):
+            _format_metrics(name, *summary[name])
 
 
 if __name__ == "__main__":
