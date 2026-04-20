@@ -22,8 +22,14 @@ def _format_dual_metrics(
     normalized_metrics: MetricTriplet,
     real_metrics: MetricTriplet,
 ) -> None:
-    _format_metrics(f"{label} [normalized]", *normalized_metrics)
-    _format_metrics(f"{label} [real]", *real_metrics)
+    normalized_mae, normalized_rmse, normalized_mape = normalized_metrics
+    real_mae, real_rmse, real_mape = real_metrics
+    print(
+        f"{label:<{METRIC_LABEL_WIDTH}} | "
+        f"MAE: {real_mae:.4f}[real] {normalized_mae:.4f}[normalized] | "
+        f"RMSE: {real_rmse:.4f}[real] {normalized_rmse:.4f}[normalized] | "
+        f"MAPE: {real_mape:.4f}%[real] {normalized_mape:.4f}%[normalized]"
+    )
 
 
 def _compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> tuple[float, float, float]:

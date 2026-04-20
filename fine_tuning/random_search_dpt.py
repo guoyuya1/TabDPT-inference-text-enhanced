@@ -26,6 +26,7 @@ try:
         FineTuneDataSplits,
         PreparedFineTuneTrial,
         RollingMetrics,
+        evaluate_fresh_baseline_metric,
         evaluate_prepared_split,
         fine_tune_prepared_trial,
         load_and_split_fine_tune_data,
@@ -40,6 +41,7 @@ except ImportError:
         FineTuneDataSplits,
         PreparedFineTuneTrial,
         RollingMetrics,
+        evaluate_fresh_baseline_metric,
         evaluate_prepared_split,
         fine_tune_prepared_trial,
         load_and_split_fine_tune_data,
@@ -691,36 +693,6 @@ def _format_per_horizon_baseline_lines(horizon_result: HorizonBaselineResult) ->
     return lines
 
 
-def _baseline_eval_inputs(
-    prepared_trial: PreparedFineTuneTrial,
-    *,
-    split_name: str,
-) -> tuple[Any, Any, Any, Any, Any, Any, Any]:
-    splits = prepared_trial.splits
-    raw_splits = prepared_trial.raw_splits
-    if split_name == "val":
-        return (
-            np.concatenate((prepared_trial.X_context_proc, prepared_trial.X_train_proc)),
-            np.concatenate((splits.y_context, splits.y_train)),
-            np.concatenate((splits.text_context, splits.text_train), axis=0),
-            prepared_trial.X_val_proc,
-            splits.y_val,
-            raw_splits.y_val,
-            splits.text_val,
-        )
-    if split_name == "test":
-        return (
-            np.concatenate((prepared_trial.X_context_proc, prepared_trial.X_train_proc, prepared_trial.X_val_proc)),
-            np.concatenate((splits.y_context, splits.y_train, splits.y_val)),
-            np.concatenate((splits.text_context, splits.text_train, splits.text_val), axis=0),
-            prepared_trial.X_test_proc,
-            splits.y_test,
-            raw_splits.y_test,
-            splits.text_test,
-        )
-    raise ValueError(f"Unsupported split_name: {split_name!r}. Expected 'val' or 'test'.")
-
-
 def run_shared_baseline_evaluation(
     base_run_cfg: DataConfig,
     *,
@@ -743,142 +715,82 @@ def run_shared_baseline_evaluation(
             for horizon in range(1, base_run_cfg.prediction_window + 1):
                 print(f"\n-- Shared baseline horizon {horizon}/{base_run_cfg.prediction_window} --")
                 set_random_seeds(base_run_cfg.seed)
-                prepared_trial = prepare_fine_tune_trial(
-                    base_run_cfg,
-                    data_splits=data_splits,
-                    horizon=horizon,
-                )
-
-                val_inputs = _baseline_eval_inputs(prepared_trial, split_name="val")
                 val_no_text = _metrics_from_triplet(
-                    evaluate_rolling(
-                        prepared_trial.reg,
-                        X_context_proc=val_inputs[0],
-                        y_context=val_inputs[1],
-                        text_context=val_inputs[2],
-                        X_eval_proc=val_inputs[3],
-                        y_eval=val_inputs[4],
-                        y_eval_real=val_inputs[5],
-                        text_eval=val_inputs[6],
-                        use_text=False,
-                        label="Baseline val (no text attn)",
-                        max_context=base_run_cfg.tuning.max_context,
-                        target_scaler=prepared_trial.target_scaler,
+                    evaluate_fresh_baseline_metric(
+                        base_run_cfg,
+                        data_splits=data_splits,
                         horizon=horizon,
+                        split_name="val",
+                        baseline_kind="no_text",
+                        label="Baseline val (no text attn)",
                     )
                 )
                 val_with_text = _metrics_from_triplet(
-                    evaluate_rolling(
-                        prepared_trial.reg,
-                        X_context_proc=val_inputs[0],
-                        y_context=val_inputs[1],
-                        text_context=val_inputs[2],
-                        X_eval_proc=val_inputs[3],
-                        y_eval=val_inputs[4],
-                        y_eval_real=val_inputs[5],
-                        text_eval=val_inputs[6],
-                        use_text=True,
-                        label="Baseline val (with text attn)",
-                        max_context=base_run_cfg.tuning.max_context,
-                        target_scaler=prepared_trial.target_scaler,
+                    evaluate_fresh_baseline_metric(
+                        base_run_cfg,
+                        data_splits=data_splits,
                         horizon=horizon,
+                        split_name="val",
+                        baseline_kind="with_text",
+                        label="Baseline val (with text attn)",
                     )
                 )
                 val_pca = _metrics_from_triplet(
-                    evaluate_rolling_pca(
-                        prepared_trial.reg,
-                        X_context_proc=val_inputs[0],
-                        y_context=val_inputs[1],
-                        text_context=val_inputs[2],
-                        X_eval_proc=val_inputs[3],
-                        y_eval=val_inputs[4],
-                        y_eval_real=val_inputs[5],
-                        text_eval=val_inputs[6],
-                        label="Baseline val (PCA)",
-                        max_context=base_run_cfg.tuning.max_context,
-                        target_scaler=prepared_trial.target_scaler,
+                    evaluate_fresh_baseline_metric(
+                        base_run_cfg,
+                        data_splits=data_splits,
                         horizon=horizon,
+                        split_name="val",
+                        baseline_kind="pca",
+                        label="Baseline val (PCA)",
                     )
                 )
-                val_truncate_result = evaluate_rolling_truncate_text(
-                    prepared_trial.reg,
-                    X_context_proc=val_inputs[0],
-                    y_context=val_inputs[1],
-                    text_context=val_inputs[2],
-                    X_eval_proc=val_inputs[3],
-                    y_eval=val_inputs[4],
-                    y_eval_real=val_inputs[5],
-                    text_eval=val_inputs[6],
-                    label="Baseline val (text truncate)",
-                    max_context=base_run_cfg.tuning.max_context,
-                    target_scaler=prepared_trial.target_scaler,
+                val_truncate_result = evaluate_fresh_baseline_metric(
+                    base_run_cfg,
+                    data_splits=data_splits,
                     horizon=horizon,
+                    split_name="val",
+                    baseline_kind="truncate_text",
+                    label="Baseline val (text truncate)",
                 )
 
-                test_inputs = _baseline_eval_inputs(prepared_trial, split_name="test")
                 test_no_text = _metrics_from_triplet(
-                    evaluate_rolling(
-                        prepared_trial.reg,
-                        X_context_proc=test_inputs[0],
-                        y_context=test_inputs[1],
-                        text_context=test_inputs[2],
-                        X_eval_proc=test_inputs[3],
-                        y_eval=test_inputs[4],
-                        y_eval_real=test_inputs[5],
-                        text_eval=test_inputs[6],
-                        use_text=False,
-                        label="Baseline test (no text attn)",
-                        max_context=base_run_cfg.tuning.max_context,
-                        target_scaler=prepared_trial.target_scaler,
+                    evaluate_fresh_baseline_metric(
+                        base_run_cfg,
+                        data_splits=data_splits,
                         horizon=horizon,
+                        split_name="test",
+                        baseline_kind="no_text",
+                        label="Baseline test (no text attn)",
                     )
                 )
                 test_with_text = _metrics_from_triplet(
-                    evaluate_rolling(
-                        prepared_trial.reg,
-                        X_context_proc=test_inputs[0],
-                        y_context=test_inputs[1],
-                        text_context=test_inputs[2],
-                        X_eval_proc=test_inputs[3],
-                        y_eval=test_inputs[4],
-                        y_eval_real=test_inputs[5],
-                        text_eval=test_inputs[6],
-                        use_text=True,
-                        label="Baseline test (with text attn)",
-                        max_context=base_run_cfg.tuning.max_context,
-                        target_scaler=prepared_trial.target_scaler,
+                    evaluate_fresh_baseline_metric(
+                        base_run_cfg,
+                        data_splits=data_splits,
                         horizon=horizon,
+                        split_name="test",
+                        baseline_kind="with_text",
+                        label="Baseline test (with text attn)",
                     )
                 )
                 test_pca = _metrics_from_triplet(
-                    evaluate_rolling_pca(
-                        prepared_trial.reg,
-                        X_context_proc=test_inputs[0],
-                        y_context=test_inputs[1],
-                        text_context=test_inputs[2],
-                        X_eval_proc=test_inputs[3],
-                        y_eval=test_inputs[4],
-                        y_eval_real=test_inputs[5],
-                        text_eval=test_inputs[6],
-                        label="Baseline test (PCA)",
-                        max_context=base_run_cfg.tuning.max_context,
-                        target_scaler=prepared_trial.target_scaler,
+                    evaluate_fresh_baseline_metric(
+                        base_run_cfg,
+                        data_splits=data_splits,
                         horizon=horizon,
+                        split_name="test",
+                        baseline_kind="pca",
+                        label="Baseline test (PCA)",
                     )
                 )
-                test_truncate_result = evaluate_rolling_truncate_text(
-                    prepared_trial.reg,
-                    X_context_proc=test_inputs[0],
-                    y_context=test_inputs[1],
-                    text_context=test_inputs[2],
-                    X_eval_proc=test_inputs[3],
-                    y_eval=test_inputs[4],
-                    y_eval_real=test_inputs[5],
-                    text_eval=test_inputs[6],
-                    label="Baseline test (text truncate)",
-                    max_context=base_run_cfg.tuning.max_context,
-                    target_scaler=prepared_trial.target_scaler,
+                test_truncate_result = evaluate_fresh_baseline_metric(
+                    base_run_cfg,
+                    data_splits=data_splits,
                     horizon=horizon,
+                    split_name="test",
+                    baseline_kind="truncate_text",
+                    label="Baseline test (text truncate)",
                 )
 
                 val_truncate = None

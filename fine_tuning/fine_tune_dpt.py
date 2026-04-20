@@ -192,6 +192,10 @@ def load_tabdpt_regressor(
     if device in (None, "auto"):
         device = "cuda" if torch.cuda.is_available() else "cpu"
     return TabDPTRegressor(
+        # Numeric features are already standardized in normalize_fine_tune_splits.
+        # Keep TabDPT preprocessing aligned with the baseline by disabling its
+        # internal scaler here.
+        normalizer=None,
         device=device,
         text_attn_layers=text_attn_layers,
         model_weight_path=model_weight_path,
@@ -564,20 +568,32 @@ def prepare_fine_tune_trial(
     )
 
 
-def _prepared_eval_inputs(
-    prepared_trial: PreparedFineTuneTrial,
-    *,
+def build_history_and_eval_split(
+    X_context: np.ndarray,
+    X_train: np.ndarray,
+    X_val: np.ndarray,
+    X_test: np.ndarray,
+    y_context: np.ndarray,
+    y_train: np.ndarray,
+    y_val: np.ndarray,
+    y_test: np.ndarray,
+    text_context: np.ndarray,
+    text_train: np.ndarray,
+    text_val: np.ndarray,
+    text_test: np.ndarray,
     split_name: str,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    splits = prepared_trial.splits
-    raw_splits = prepared_trial.raw_splits
-    trim = max(0, prepared_trial.prediction_horizon - 1)
+    horizon: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Build the rolling history prefix and eval segment for train, val, or test."""
+    if horizon <= 0:
+        raise ValueError("horizon must be positive.")
 
     def _trim_history_tail(
         X_hist: np.ndarray,
         y_hist: np.ndarray,
         text_hist: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        trim = max(0, horizon - 1)
         if trim == 0:
             return X_hist, y_hist, text_hist
         if trim >= len(y_hist):
@@ -585,46 +601,56 @@ def _prepared_eval_inputs(
         return X_hist[:-trim], y_hist[:-trim], text_hist[:-trim]
 
     if split_name == "train":
-        return (
-            prepared_trial.X_context_proc,
-            splits.y_context,
-            splits.text_context,
-            prepared_trial.X_train_proc,
-            splits.y_train,
-            raw_splits.y_train,
-            splits.text_train,
-        )
+        return X_context, y_context, text_context, X_train, y_train, text_train
     if split_name == "val":
         X_hist, y_hist, text_hist = _trim_history_tail(
-            np.concatenate((prepared_trial.X_context_proc, prepared_trial.X_train_proc)),
-            np.concatenate((splits.y_context, splits.y_train)),
-            np.concatenate((splits.text_context, splits.text_train), axis=0),
+            np.concatenate((X_context, X_train), axis=0),
+            np.concatenate((y_context, y_train), axis=0),
+            np.concatenate((text_context, text_train), axis=0),
         )
-        return (
-            X_hist,
-            y_hist,
-            text_hist,
-            prepared_trial.X_val_proc,
-            splits.y_val,
-            raw_splits.y_val,
-            splits.text_val,
-        )
+        return X_hist, y_hist, text_hist, X_val, y_val, text_val
     if split_name == "test":
         X_hist, y_hist, text_hist = _trim_history_tail(
-            np.concatenate((prepared_trial.X_context_proc, prepared_trial.X_train_proc, prepared_trial.X_val_proc)),
-            np.concatenate((splits.y_context, splits.y_train, splits.y_val)),
-            np.concatenate((splits.text_context, splits.text_train, splits.text_val), axis=0),
+            np.concatenate((X_context, X_train, X_val), axis=0),
+            np.concatenate((y_context, y_train, y_val), axis=0),
+            np.concatenate((text_context, text_train, text_val), axis=0),
         )
-        return (
-            X_hist,
-            y_hist,
-            text_hist,
-            prepared_trial.X_test_proc,
-            splits.y_test,
-            raw_splits.y_test,
-            splits.text_test,
-        )
+        return X_hist, y_hist, text_hist, X_test, y_test, text_test
     raise ValueError(f"Unsupported split_name: {split_name!r}. Expected 'train', 'val', or 'test'.")
+
+
+def _prepared_eval_inputs(
+    prepared_trial: PreparedFineTuneTrial,
+    *,
+    split_name: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    splits = prepared_trial.splits
+    raw_splits = prepared_trial.raw_splits
+    X_hist, y_hist, text_hist, X_eval, y_eval, text_eval = build_history_and_eval_split(
+        prepared_trial.X_context_proc,
+        prepared_trial.X_train_proc,
+        prepared_trial.X_val_proc,
+        prepared_trial.X_test_proc,
+        splits.y_context,
+        splits.y_train,
+        splits.y_val,
+        splits.y_test,
+        splits.text_context,
+        splits.text_train,
+        splits.text_val,
+        splits.text_test,
+        split_name,
+        prepared_trial.prediction_horizon,
+    )
+    if split_name == "train":
+        y_eval_real = raw_splits.y_train
+    elif split_name == "val":
+        y_eval_real = raw_splits.y_val
+    elif split_name == "test":
+        y_eval_real = raw_splits.y_test
+    else:
+        raise ValueError(f"Unsupported split_name: {split_name!r}. Expected 'train', 'val', or 'test'.")
+    return X_hist, y_hist, text_hist, X_eval, y_eval, y_eval_real, text_eval
 
 
 def _reset_compiler_state() -> None:
@@ -1296,9 +1322,22 @@ def fine_tune_external_gate(
     best_state_dict: dict[str, torch.Tensor] | None = None
     top_validation_mae_checkpoints: list[ValidationMaeCheckpoint] = []
     epochs_without_improvement = 0
-    val_context_proc = np.concatenate((X_context_proc, X_train_proc))
-    val_y_context = np.concatenate((y_context, y_train))
-    val_text_context = np.concatenate((text_context, text_train), axis=0)
+    val_context_proc, val_y_context, val_text_context, _, _, _ = build_history_and_eval_split(
+        X_context_proc,
+        X_train_proc,
+        X_val_proc,
+        X_val_proc[:0],
+        y_context,
+        y_train,
+        y_val,
+        y_val[:0],
+        text_context,
+        text_train,
+        text_val,
+        text_val[:0],
+        "val",
+        prediction_horizon,
+    )
 
     for epoch in range(1, tuning_cfg.epochs + 1):
         _set_text_attn_dropout_mode(reg, enabled=True)
@@ -1598,34 +1637,36 @@ def _run_single_horizon(
     _format_dual_metrics("Train (PCA)", *baseline_pca_train)
     if baseline_truncate_train is not None:
         _format_dual_metrics(baseline_truncate_train[1], *baseline_truncate_train[0])
+    train_context_proc, train_y_context, train_text_context, train_eval_proc, train_y_eval, train_y_eval_real, train_text_eval = (
+        _prepared_eval_inputs(prepared_trial, split_name="train")
+    )
     evaluate_rolling(
         reg,
-        X_context_proc=X_context_proc,
-        y_context=y_context,
-        text_context=text_context,
-        X_eval_proc=X_train_proc,
-        y_eval=y_train,
-        y_eval_real=y_train_real,
-        text_eval=text_train,
+        X_context_proc=train_context_proc,
+        y_context=train_y_context,
+        text_context=train_text_context,
+        X_eval_proc=train_eval_proc,
+        y_eval=train_y_eval,
+        y_eval_real=train_y_eval_real,
+        text_eval=train_text_eval,
         use_text=True,
         label="Train (with text attn)",
         max_context=run_cfg.tuning.max_context,
         target_scaler=prepared_trial.target_scaler,
         horizon=horizon,
     )
-
-    test_context_proc = np.concatenate((X_context_proc, X_train_proc, X_val_proc))
-    test_y_context = np.concatenate((y_context, y_train, y_val))
-    test_text_context = np.concatenate((text_context, text_train, text_val), axis=0)
+    test_context_proc, test_y_context, test_text_context, test_eval_proc, test_y_eval, test_y_eval_real, test_text_eval = (
+        _prepared_eval_inputs(prepared_trial, split_name="test")
+    )
     tuned_no_text_test = evaluate_rolling(
         reg,
         X_context_proc=test_context_proc,
         y_context=test_y_context,
         text_context=test_text_context,
-        X_eval_proc=X_test_proc,
-        y_eval=y_test,
-        y_eval_real=y_test_real,
-        text_eval=text_test,
+        X_eval_proc=test_eval_proc,
+        y_eval=test_y_eval,
+        y_eval_real=test_y_eval_real,
+        text_eval=test_text_eval,
         use_text=False,
         label="Test (no text attn)",
         max_context=run_cfg.tuning.max_context,
@@ -1637,10 +1678,10 @@ def _run_single_horizon(
         X_context_proc=test_context_proc,
         y_context=test_y_context,
         text_context=test_text_context,
-        X_eval_proc=X_test_proc,
-        y_eval=y_test,
-        y_eval_real=y_test_real,
-        text_eval=text_test,
+        X_eval_proc=test_eval_proc,
+        y_eval=test_y_eval,
+        y_eval_real=test_y_eval_real,
+        text_eval=test_text_eval,
         label="Test (PCA)",
         max_context=run_cfg.tuning.max_context,
         target_scaler=prepared_trial.target_scaler,
@@ -1651,10 +1692,10 @@ def _run_single_horizon(
         X_context_proc=test_context_proc,
         y_context=test_y_context,
         text_context=test_text_context,
-        X_eval_proc=X_test_proc,
-        y_eval=y_test,
-        y_eval_real=y_test_real,
-        text_eval=text_test,
+        X_eval_proc=test_eval_proc,
+        y_eval=test_y_eval,
+        y_eval_real=test_y_eval_real,
+        text_eval=test_text_eval,
         label="Test (text truncate)",
         max_context=run_cfg.tuning.max_context,
         target_scaler=prepared_trial.target_scaler,
@@ -1665,10 +1706,10 @@ def _run_single_horizon(
         X_context_proc=test_context_proc,
         y_context=test_y_context,
         text_context=test_text_context,
-        X_eval_proc=X_test_proc,
-        y_eval=y_test,
-        y_eval_real=y_test_real,
-        text_eval=text_test,
+        X_eval_proc=test_eval_proc,
+        y_eval=test_y_eval,
+        y_eval_real=test_y_eval_real,
+        text_eval=test_text_eval,
         use_text=True,
         label="Test (with text attn)",
         max_context=run_cfg.tuning.max_context,
@@ -1700,10 +1741,10 @@ def _run_single_horizon(
             X_context_proc=test_context_proc,
             y_context=test_y_context,
             text_context=test_text_context,
-            X_eval_proc=X_test_proc,
-            y_eval=y_test,
-            y_eval_real=y_test_real,
-            text_eval=text_test,
+            X_eval_proc=test_eval_proc,
+            y_eval=test_y_eval,
+            y_eval_real=test_y_eval_real,
+            text_eval=test_text_eval,
             use_text=True,
             label=f"Test top {rank} (with text attn)",
             max_context=run_cfg.tuning.max_context,

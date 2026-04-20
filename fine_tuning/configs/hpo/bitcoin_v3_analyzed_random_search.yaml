@@ -1,9 +1,9 @@
-base_config: ../economy_v3_analyzed_time_features.yaml
+base_config: ../bitcoin_v3_analyzed.yaml
 base_dataset: null
 trials: 50
 seed: 0
 max_parallel_trials: 2
-gpu_ids: [0, 1]
+gpu_ids: [0]
 top_k: 50
 search_space:
   text_attn_layers:
@@ -13,7 +13,6 @@ search_space:
     - [13, 14, 15, 16]
     - [1, 2]
     - [1, 2, 16]
-    - [4, 8, 12, 16]
   epochs: [100]
   gate_lr: [0.03, 0.05, 0.1, 0.2, 0.3]
   text_attn_lr: [0.0003, 0.001, 0.003, 0.01, 0.03]
