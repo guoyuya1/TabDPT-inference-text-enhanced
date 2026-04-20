@@ -1,22 +1,127 @@
 bitcoin:
-  data_path: data/processed_data/bitcoin/bitcoin_gpt_analyzed_concise_text_lag_7_numeric_lag3.csv
+  data_path: /home/yuyan/tabdpt_mz/data/processed_data_time_features/bitcoin/bitcoin_gpt_analyzed_embedding.csv
   date_column: Date
   numeric_features:
     - Open_lag1
     - Open_lag2
     - Open_lag3
+    - Open_lag4
+    - Open_lag5
+    - Open_lag6
+    - Open_lag7
+    - Open_lag8
+    - Open_lag9
+    - Open_lag10
+    - Open_lag11
+    - Open_lag12
+    - Open_lag13
+    - Open_lag14
+    - Open_lag15
+    - Open_lag16
+    - Open_lag17
+    - Open_lag18
+    - Open_lag19
+    - Open_lag20
+    - Open_lag21
+    - Open_lag22
+    - Open_lag23
+    - Open_lag24
     - High_lag1
     - High_lag2
     - High_lag3
+    - High_lag4
+    - High_lag5
+    - High_lag6
+    - High_lag7
+    - High_lag8
+    - High_lag9
+    - High_lag10
+    - High_lag11
+    - High_lag12
+    - High_lag13
+    - High_lag14
+    - High_lag15
+    - High_lag16
+    - High_lag17
+    - High_lag18
+    - High_lag19
+    - High_lag20
+    - High_lag21
+    - High_lag22
+    - High_lag23
+    - High_lag24
     - Low_lag1
     - Low_lag2
     - Low_lag3
+    - Low_lag4
+    - Low_lag5
+    - Low_lag6
+    - Low_lag7
+    - Low_lag8
+    - Low_lag9
+    - Low_lag10
+    - Low_lag11
+    - Low_lag12
+    - Low_lag13
+    - Low_lag14
+    - Low_lag15
+    - Low_lag16
+    - Low_lag17
+    - Low_lag18
+    - Low_lag19
+    - Low_lag20
+    - Low_lag21
+    - Low_lag22
+    - Low_lag23
+    - Low_lag24
     - Close_lag1
     - Close_lag2
     - Close_lag3
+    - Close_lag4
+    - Close_lag5
+    - Close_lag6
+    - Close_lag7
+    - Close_lag8
+    - Close_lag9
+    - Close_lag10
+    - Close_lag11
+    - Close_lag12
+    - Close_lag13
+    - Close_lag14
+    - Close_lag15
+    - Close_lag16
+    - Close_lag17
+    - Close_lag18
+    - Close_lag19
+    - Close_lag20
+    - Close_lag21
+    - Close_lag22
+    - Close_lag23
+    - Close_lag24
     - Adj_Close_lag1
     - Adj_Close_lag2
     - Adj_Close_lag3
+    - Adj_Close_lag4
+    - Adj_Close_lag5
+    - Adj_Close_lag6
+    - Adj_Close_lag7
+    - Adj_Close_lag8
+    - Adj_Close_lag9
+    - Adj_Close_lag10
+    - Adj_Close_lag11
+    - Adj_Close_lag12
+    - Adj_Close_lag13
+    - Adj_Close_lag14
+    - Adj_Close_lag15
+    - Adj_Close_lag16
+    - Adj_Close_lag17
+    - Adj_Close_lag18
+    - Adj_Close_lag19
+    - Adj_Close_lag20
+    - Adj_Close_lag21
+    - Adj_Close_lag22
+    - Adj_Close_lag23
+    - Adj_Close_lag24
   target_column: Adj_Close
   seed: 0
   normalizer: standard
@@ -36,9 +141,51 @@ agriculture:
     - Wholesale broiler composite_lag1
     - Wholesale broiler composite_lag2
     - Wholesale broiler composite_lag3
+    - Wholesale broiler composite_lag4
+    - Wholesale broiler composite_lag5
+    - Wholesale broiler composite_lag6
+    - Wholesale broiler composite_lag7
+    - Wholesale broiler composite_lag8
+    - Wholesale broiler composite_lag9
+    - Wholesale broiler composite_lag10
+    - Wholesale broiler composite_lag11
+    - Wholesale broiler composite_lag12
+    - Wholesale broiler composite_lag13
+    - Wholesale broiler composite_lag14
+    - Wholesale broiler composite_lag15
+    - Wholesale broiler composite_lag16
+    - Wholesale broiler composite_lag17
+    - Wholesale broiler composite_lag18
+    - Wholesale broiler composite_lag19
+    - Wholesale broiler composite_lag20
+    - Wholesale broiler composite_lag21
+    - Wholesale broiler composite_lag22
+    - Wholesale broiler composite_lag23
+    - Wholesale broiler composite_lag24
     - Retail-wholesale spread for broiler composite_lag1
     - Retail-wholesale spread for broiler composite_lag2
     - Retail-wholesale spread for broiler composite_lag3
+    - Retail-wholesale spread for broiler composite_lag4
+    - Retail-wholesale spread for broiler composite_lag5
+    - Retail-wholesale spread for broiler composite_lag6
+    - Retail-wholesale spread for broiler composite_lag7
+    - Retail-wholesale spread for broiler composite_lag8
+    - Retail-wholesale spread for broiler composite_lag9
+    - Retail-wholesale spread for broiler composite_lag10
+    - Retail-wholesale spread for broiler composite_lag11
+    - Retail-wholesale spread for broiler composite_lag12
+    - Retail-wholesale spread for broiler composite_lag13
+    - Retail-wholesale spread for broiler composite_lag14
+    - Retail-wholesale spread for broiler composite_lag15
+    - Retail-wholesale spread for broiler composite_lag16
+    - Retail-wholesale spread for broiler composite_lag17
+    - Retail-wholesale spread for broiler composite_lag18
+    - Retail-wholesale spread for broiler composite_lag19
+    - Retail-wholesale spread for broiler composite_lag20
+    - Retail-wholesale spread for broiler composite_lag21
+    - Retail-wholesale spread for broiler composite_lag22
+    - Retail-wholesale spread for broiler composite_lag23
+    - Retail-wholesale spread for broiler composite_lag24
   target_column: OT
   seed: 0
   normalizer: standard
@@ -58,24 +205,171 @@ climate:
     - MapDate_lag1
     - MapDate_lag2
     - MapDate_lag3
+    - MapDate_lag4
+    - MapDate_lag5
+    - MapDate_lag6
+    - MapDate_lag7
+    - MapDate_lag8
+    - MapDate_lag9
+    - MapDate_lag10
+    - MapDate_lag11
+    - MapDate_lag12
+    - MapDate_lag13
+    - MapDate_lag14
+    - MapDate_lag15
+    - MapDate_lag16
+    - MapDate_lag17
+    - MapDate_lag18
+    - MapDate_lag19
+    - MapDate_lag20
+    - MapDate_lag21
+    - MapDate_lag22
+    - MapDate_lag23
+    - MapDate_lag24
     - D0_lag1
     - D0_lag2
     - D0_lag3
+    - D0_lag4
+    - D0_lag5
+    - D0_lag6
+    - D0_lag7
+    - D0_lag8
+    - D0_lag9
+    - D0_lag10
+    - D0_lag11
+    - D0_lag12
+    - D0_lag13
+    - D0_lag14
+    - D0_lag15
+    - D0_lag16
+    - D0_lag17
+    - D0_lag18
+    - D0_lag19
+    - D0_lag20
+    - D0_lag21
+    - D0_lag22
+    - D0_lag23
+    - D0_lag24
     - D1_lag1
     - D1_lag2
     - D1_lag3
+    - D1_lag4
+    - D1_lag5
+    - D1_lag6
+    - D1_lag7
+    - D1_lag8
+    - D1_lag9
+    - D1_lag10
+    - D1_lag11
+    - D1_lag12
+    - D1_lag13
+    - D1_lag14
+    - D1_lag15
+    - D1_lag16
+    - D1_lag17
+    - D1_lag18
+    - D1_lag19
+    - D1_lag20
+    - D1_lag21
+    - D1_lag22
+    - D1_lag23
+    - D1_lag24
     - D2_lag1
     - D2_lag2
     - D2_lag3
+    - D2_lag4
+    - D2_lag5
+    - D2_lag6
+    - D2_lag7
+    - D2_lag8
+    - D2_lag9
+    - D2_lag10
+    - D2_lag11
+    - D2_lag12
+    - D2_lag13
+    - D2_lag14
+    - D2_lag15
+    - D2_lag16
+    - D2_lag17
+    - D2_lag18
+    - D2_lag19
+    - D2_lag20
+    - D2_lag21
+    - D2_lag22
+    - D2_lag23
+    - D2_lag24
     - D3_lag1
     - D3_lag2
     - D3_lag3
+    - D3_lag4
+    - D3_lag5
+    - D3_lag6
+    - D3_lag7
+    - D3_lag8
+    - D3_lag9
+    - D3_lag10
+    - D3_lag11
+    - D3_lag12
+    - D3_lag13
+    - D3_lag14
+    - D3_lag15
+    - D3_lag16
+    - D3_lag17
+    - D3_lag18
+    - D3_lag19
+    - D3_lag20
+    - D3_lag21
+    - D3_lag22
+    - D3_lag23
+    - D3_lag24
     - D4_lag1
     - D4_lag2
     - D4_lag3
+    - D4_lag4
+    - D4_lag5
+    - D4_lag6
+    - D4_lag7
+    - D4_lag8
+    - D4_lag9
+    - D4_lag10
+    - D4_lag11
+    - D4_lag12
+    - D4_lag13
+    - D4_lag14
+    - D4_lag15
+    - D4_lag16
+    - D4_lag17
+    - D4_lag18
+    - D4_lag19
+    - D4_lag20
+    - D4_lag21
+    - D4_lag22
+    - D4_lag23
+    - D4_lag24
     - StatisticFormatID_lag1
     - StatisticFormatID_lag2
     - StatisticFormatID_lag3
+    - StatisticFormatID_lag4
+    - StatisticFormatID_lag5
+    - StatisticFormatID_lag6
+    - StatisticFormatID_lag7
+    - StatisticFormatID_lag8
+    - StatisticFormatID_lag9
+    - StatisticFormatID_lag10
+    - StatisticFormatID_lag11
+    - StatisticFormatID_lag12
+    - StatisticFormatID_lag13
+    - StatisticFormatID_lag14
+    - StatisticFormatID_lag15
+    - StatisticFormatID_lag16
+    - StatisticFormatID_lag17
+    - StatisticFormatID_lag18
+    - StatisticFormatID_lag19
+    - StatisticFormatID_lag20
+    - StatisticFormatID_lag21
+    - StatisticFormatID_lag22
+    - StatisticFormatID_lag23
+    - StatisticFormatID_lag24
   target_column: OT
   seed: 0
   normalizer: standard
@@ -88,18 +382,81 @@ climate:
 
 
 economy:
-  data_path: data/processed_data_time_features/economy/economy_v3_gpt_summarized.csv
+  data_path: data/processed_data_time_features/economy/economy_v3_gpt_analyzed.csv
   date_column: date
   numeric_features:
     - Exports_lag1
     - Exports_lag2
     - Exports_lag3
+    - Exports_lag4
+    - Exports_lag5
+    - Exports_lag6
+    - Exports_lag7
+    - Exports_lag8
+    - Exports_lag9
+    - Exports_lag10
+    - Exports_lag11
+    - Exports_lag12
+    - Exports_lag13
+    - Exports_lag14
+    - Exports_lag15
+    - Exports_lag16
+    - Exports_lag17
+    - Exports_lag18
+    - Exports_lag19
+    - Exports_lag20
+    - Exports_lag21
+    - Exports_lag22
+    - Exports_lag23
+    - Exports_lag24
     - Imports_lag1
     - Imports_lag2
     - Imports_lag3
+    - Imports_lag4
+    - Imports_lag5
+    - Imports_lag6
+    - Imports_lag7
+    - Imports_lag8
+    - Imports_lag9
+    - Imports_lag10
+    - Imports_lag11
+    - Imports_lag12
+    - Imports_lag13
+    - Imports_lag14
+    - Imports_lag15
+    - Imports_lag16
+    - Imports_lag17
+    - Imports_lag18
+    - Imports_lag19
+    - Imports_lag20
+    - Imports_lag21
+    - Imports_lag22
+    - Imports_lag23
+    - Imports_lag24
     - OT_lag1
     - OT_lag2
     - OT_lag3
+    - OT_lag4
+    - OT_lag5
+    - OT_lag6
+    - OT_lag7
+    - OT_lag8
+    - OT_lag9
+    - OT_lag10
+    - OT_lag11
+    - OT_lag12
+    - OT_lag13
+    - OT_lag14
+    - OT_lag15
+    - OT_lag16
+    - OT_lag17
+    - OT_lag18
+    - OT_lag19
+    - OT_lag20
+    - OT_lag21
+    - OT_lag22
+    - OT_lag23
+    - OT_lag24
   target_column: OT
   seed: 0
   normalizer: standard
@@ -111,36 +468,225 @@ economy:
   max_context: 2000
 
 energy:
-  data_path: data/processed_data_time_features/energy/Energy_gpt_analyzed_concise_text_lag_7_numeric_lag14.csv
+  data_path: /home/yuyan/tabdpt_mz/data/processed_data_time_features/energy/Energy_gpt_analyzed_embedding.csv
   date_column: date
   numeric_features:
     - OT_lag1
     - OT_lag2
     - OT_lag3
+    - OT_lag4
+    - OT_lag5
+    - OT_lag6
+    - OT_lag7
+    - OT_lag8
+    - OT_lag9
+    - OT_lag10
+    - OT_lag11
+    - OT_lag12
+    - OT_lag13
+    - OT_lag14
+    - OT_lag15
+    - OT_lag16
+    - OT_lag17
+    - OT_lag18
+    - OT_lag19
+    - OT_lag20
+    - OT_lag21
+    - OT_lag22
+    - OT_lag23
+    - OT_lag24
     - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag1
     - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag2
     - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag3
+    - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag4
+    - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag5
+    - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag6
+    - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag7
+    - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag8
+    - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag9
+    - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag10
+    - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag11
+    - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag12
+    - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag13
+    - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag14
+    - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag15
+    - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag16
+    - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag17
+    - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag18
+    - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag19
+    - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag20
+    - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag21
+    - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag22
+    - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag23
+    - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag24
     - Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag1
     - Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag2
     - Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag3
+    - Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag4
+    - Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag5
+    - Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag6
+    - Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag7
+    - Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag8
+    - Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag9
+    - Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag10
+    - Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag11
+    - Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag12
+    - Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag13
+    - Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag14
+    - Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag15
+    - Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag16
+    - Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag17
+    - Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag18
+    - Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag19
+    - Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag20
+    - Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag21
+    - Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag22
+    - Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag23
+    - Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag24
     - Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag1
     - Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag2
     - Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag3
+    - Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag4
+    - Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag5
+    - Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag6
+    - Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag7
+    - Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag8
+    - Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag9
+    - Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag10
+    - Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag11
+    - Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag12
+    - Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag13
+    - Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag14
+    - Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag15
+    - Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag16
+    - Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag17
+    - Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag18
+    - Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag19
+    - Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag20
+    - Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag21
+    - Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag22
+    - Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag23
+    - Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag24
     - Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag1
     - Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag2
     - Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag3
+    - Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag4
+    - Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag5
+    - Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag6
+    - Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag7
+    - Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag8
+    - Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag9
+    - Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag10
+    - Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag11
+    - Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag12
+    - Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag13
+    - Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag14
+    - Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag15
+    - Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag16
+    - Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag17
+    - Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag18
+    - Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag19
+    - Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag20
+    - Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag21
+    - Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag22
+    - Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag23
+    - Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag24
     - Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag1
     - Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag2
     - Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag3
+    - Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag4
+    - Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag5
+    - Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag6
+    - Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag7
+    - Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag8
+    - Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag9
+    - Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag10
+    - Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag11
+    - Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag12
+    - Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag13
+    - Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag14
+    - Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag15
+    - Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag16
+    - Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag17
+    - Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag18
+    - Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag19
+    - Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag20
+    - Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag21
+    - Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag22
+    - Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag23
+    - Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag24
     - Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag1
     - Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag2
     - Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag3
+    - Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag4
+    - Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag5
+    - Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag6
+    - Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag7
+    - Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag8
+    - Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag9
+    - Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag10
+    - Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag11
+    - Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag12
+    - Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag13
+    - Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag14
+    - Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag15
+    - Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag16
+    - Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag17
+    - Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag18
+    - Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag19
+    - Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag20
+    - Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag21
+    - Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag22
+    - Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag23
+    - Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag24
     - Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag1
     - Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag2
     - Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag3
+    - Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag4
+    - Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag5
+    - Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag6
+    - Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag7
+    - Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag8
+    - Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag9
+    - Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag10
+    - Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag11
+    - Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag12
+    - Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag13
+    - Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag14
+    - Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag15
+    - Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag16
+    - Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag17
+    - Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag18
+    - Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag19
+    - Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag20
+    - Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag21
+    - Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag22
+    - Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag23
+    - Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag24
     - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag1
     - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag2
     - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag3
+    - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag4
+    - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag5
+    - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag6
+    - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag7
+    - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag8
+    - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag9
+    - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag10
+    - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag11
+    - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag12
+    - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag13
+    - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag14
+    - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag15
+    - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag16
+    - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag17
+    - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag18
+    - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag19
+    - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag20
+    - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag21
+    - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag22
+    - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag23
+    - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag24
   target_column: OT
   seed: 0
   normalizer: standard
@@ -151,25 +697,67 @@ energy:
   test_ratio: 0.2
   max_context: 2000
 
-environment:
-  data_path: data/processed_data_time_features/environment/Environment_with_text_with_embeddings_Qwen-Qwen3-Embedding-8B_lag_14.csv
-  date_column: date
-  numeric_features:
-    - CBSA Code_lag1
-    - CBSA Code_lag2
-    - CBSA Code_lag3
-    - Number of Sites Reporting_lag1
-    - Number of Sites Reporting_lag2
-    - Number of Sites Reporting_lag3
-  target_column: OT
-  seed: 0
-  normalizer: standard
-  prediction_window: 12
-  context_ratio: 0.2
-  train_ratio: 0.5
-  val_ratio: 0.1
-  test_ratio: 0.2
-  max_context: 2000
+# environment:
+#   data_path: data/processed_data_time_features/environment/Environment_with_text_with_embeddings_Qwen-Qwen3-Embedding-8B_lag_14.csv
+#   date_column: date
+#   numeric_features:
+#     - CBSA Code_lag1
+#     - CBSA Code_lag2
+#     - CBSA Code_lag3
+#     - CBSA Code_lag4
+#     - CBSA Code_lag5
+#     - CBSA Code_lag6
+#     - CBSA Code_lag7
+#     - CBSA Code_lag8
+#     - CBSA Code_lag9
+#     - CBSA Code_lag10
+#     - CBSA Code_lag11
+#     - CBSA Code_lag12
+#     - CBSA Code_lag13
+#     - CBSA Code_lag14
+#     - CBSA Code_lag15
+#     - CBSA Code_lag16
+#     - CBSA Code_lag17
+#     - CBSA Code_lag18
+#     - CBSA Code_lag19
+#     - CBSA Code_lag20
+#     - CBSA Code_lag21
+#     - CBSA Code_lag22
+#     - CBSA Code_lag23
+#     - CBSA Code_lag24
+#     - Number of Sites Reporting_lag1
+#     - Number of Sites Reporting_lag2
+#     - Number of Sites Reporting_lag3
+#     - Number of Sites Reporting_lag4
+#     - Number of Sites Reporting_lag5
+#     - Number of Sites Reporting_lag6
+#     - Number of Sites Reporting_lag7
+#     - Number of Sites Reporting_lag8
+#     - Number of Sites Reporting_lag9
+#     - Number of Sites Reporting_lag10
+#     - Number of Sites Reporting_lag11
+#     - Number of Sites Reporting_lag12
+#     - Number of Sites Reporting_lag13
+#     - Number of Sites Reporting_lag14
+#     - Number of Sites Reporting_lag15
+#     - Number of Sites Reporting_lag16
+#     - Number of Sites Reporting_lag17
+#     - Number of Sites Reporting_lag18
+#     - Number of Sites Reporting_lag19
+#     - Number of Sites Reporting_lag20
+#     - Number of Sites Reporting_lag21
+#     - Number of Sites Reporting_lag22
+#     - Number of Sites Reporting_lag23
+#     - Number of Sites Reporting_lag24
+#   target_column: OT
+#   seed: 0
+#   normalizer: standard
+#   prediction_window: 12
+#   context_ratio: 0.2
+#   train_ratio: 0.5
+#   val_ratio: 0.1
+#   test_ratio: 0.2
+#   max_context: 2000
 
 health_us:
   data_path: data/processed_data_time_features/health_us/Health_US_with_text_with_embeddings_Qwen-Qwen3-Embedding-8B_lag_14.csv
@@ -178,30 +766,219 @@ health_us:
     - YEAR_lag1
     - YEAR_lag2
     - YEAR_lag3
+    - YEAR_lag4
+    - YEAR_lag5
+    - YEAR_lag6
+    - YEAR_lag7
+    - YEAR_lag8
+    - YEAR_lag9
+    - YEAR_lag10
+    - YEAR_lag11
+    - YEAR_lag12
+    - YEAR_lag13
+    - YEAR_lag14
+    - YEAR_lag15
+    - YEAR_lag16
+    - YEAR_lag17
+    - YEAR_lag18
+    - YEAR_lag19
+    - YEAR_lag20
+    - YEAR_lag21
+    - YEAR_lag22
+    - YEAR_lag23
+    - YEAR_lag24
     - WEEK_lag1
     - WEEK_lag2
     - WEEK_lag3
+    - WEEK_lag4
+    - WEEK_lag5
+    - WEEK_lag6
+    - WEEK_lag7
+    - WEEK_lag8
+    - WEEK_lag9
+    - WEEK_lag10
+    - WEEK_lag11
+    - WEEK_lag12
+    - WEEK_lag13
+    - WEEK_lag14
+    - WEEK_lag15
+    - WEEK_lag16
+    - WEEK_lag17
+    - WEEK_lag18
+    - WEEK_lag19
+    - WEEK_lag20
+    - WEEK_lag21
+    - WEEK_lag22
+    - WEEK_lag23
+    - WEEK_lag24
     - "% WEIGHTED ILI_lag1"
     - "% WEIGHTED ILI_lag2"
     - "% WEIGHTED ILI_lag3"
+    - "% WEIGHTED ILI_lag4"
+    - "% WEIGHTED ILI_lag5"
+    - "% WEIGHTED ILI_lag6"
+    - "% WEIGHTED ILI_lag7"
+    - "% WEIGHTED ILI_lag8"
+    - "% WEIGHTED ILI_lag9"
+    - "% WEIGHTED ILI_lag10"
+    - "% WEIGHTED ILI_lag11"
+    - "% WEIGHTED ILI_lag12"
+    - "% WEIGHTED ILI_lag13"
+    - "% WEIGHTED ILI_lag14"
+    - "% WEIGHTED ILI_lag15"
+    - "% WEIGHTED ILI_lag16"
+    - "% WEIGHTED ILI_lag17"
+    - "% WEIGHTED ILI_lag18"
+    - "% WEIGHTED ILI_lag19"
+    - "% WEIGHTED ILI_lag20"
+    - "% WEIGHTED ILI_lag21"
+    - "% WEIGHTED ILI_lag22"
+    - "% WEIGHTED ILI_lag23"
+    - "% WEIGHTED ILI_lag24"
     - AGE 0-4_lag1
     - AGE 0-4_lag2
     - AGE 0-4_lag3
+    - AGE 0-4_lag4
+    - AGE 0-4_lag5
+    - AGE 0-4_lag6
+    - AGE 0-4_lag7
+    - AGE 0-4_lag8
+    - AGE 0-4_lag9
+    - AGE 0-4_lag10
+    - AGE 0-4_lag11
+    - AGE 0-4_lag12
+    - AGE 0-4_lag13
+    - AGE 0-4_lag14
+    - AGE 0-4_lag15
+    - AGE 0-4_lag16
+    - AGE 0-4_lag17
+    - AGE 0-4_lag18
+    - AGE 0-4_lag19
+    - AGE 0-4_lag20
+    - AGE 0-4_lag21
+    - AGE 0-4_lag22
+    - AGE 0-4_lag23
+    - AGE 0-4_lag24
     - AGE 5-24_lag1
     - AGE 5-24_lag2
     - AGE 5-24_lag3
+    - AGE 5-24_lag4
+    - AGE 5-24_lag5
+    - AGE 5-24_lag6
+    - AGE 5-24_lag7
+    - AGE 5-24_lag8
+    - AGE 5-24_lag9
+    - AGE 5-24_lag10
+    - AGE 5-24_lag11
+    - AGE 5-24_lag12
+    - AGE 5-24_lag13
+    - AGE 5-24_lag14
+    - AGE 5-24_lag15
+    - AGE 5-24_lag16
+    - AGE 5-24_lag17
+    - AGE 5-24_lag18
+    - AGE 5-24_lag19
+    - AGE 5-24_lag20
+    - AGE 5-24_lag21
+    - AGE 5-24_lag22
+    - AGE 5-24_lag23
+    - AGE 5-24_lag24
     - AGE 65_lag1
     - AGE 65_lag2
     - AGE 65_lag3
+    - AGE 65_lag4
+    - AGE 65_lag5
+    - AGE 65_lag6
+    - AGE 65_lag7
+    - AGE 65_lag8
+    - AGE 65_lag9
+    - AGE 65_lag10
+    - AGE 65_lag11
+    - AGE 65_lag12
+    - AGE 65_lag13
+    - AGE 65_lag14
+    - AGE 65_lag15
+    - AGE 65_lag16
+    - AGE 65_lag17
+    - AGE 65_lag18
+    - AGE 65_lag19
+    - AGE 65_lag20
+    - AGE 65_lag21
+    - AGE 65_lag22
+    - AGE 65_lag23
+    - AGE 65_lag24
     - ILITOTAL_lag1
     - ILITOTAL_lag2
     - ILITOTAL_lag3
+    - ILITOTAL_lag4
+    - ILITOTAL_lag5
+    - ILITOTAL_lag6
+    - ILITOTAL_lag7
+    - ILITOTAL_lag8
+    - ILITOTAL_lag9
+    - ILITOTAL_lag10
+    - ILITOTAL_lag11
+    - ILITOTAL_lag12
+    - ILITOTAL_lag13
+    - ILITOTAL_lag14
+    - ILITOTAL_lag15
+    - ILITOTAL_lag16
+    - ILITOTAL_lag17
+    - ILITOTAL_lag18
+    - ILITOTAL_lag19
+    - ILITOTAL_lag20
+    - ILITOTAL_lag21
+    - ILITOTAL_lag22
+    - ILITOTAL_lag23
+    - ILITOTAL_lag24
     - NUM. OF PROVIDERS_lag1
     - NUM. OF PROVIDERS_lag2
     - NUM. OF PROVIDERS_lag3
+    - NUM. OF PROVIDERS_lag4
+    - NUM. OF PROVIDERS_lag5
+    - NUM. OF PROVIDERS_lag6
+    - NUM. OF PROVIDERS_lag7
+    - NUM. OF PROVIDERS_lag8
+    - NUM. OF PROVIDERS_lag9
+    - NUM. OF PROVIDERS_lag10
+    - NUM. OF PROVIDERS_lag11
+    - NUM. OF PROVIDERS_lag12
+    - NUM. OF PROVIDERS_lag13
+    - NUM. OF PROVIDERS_lag14
+    - NUM. OF PROVIDERS_lag15
+    - NUM. OF PROVIDERS_lag16
+    - NUM. OF PROVIDERS_lag17
+    - NUM. OF PROVIDERS_lag18
+    - NUM. OF PROVIDERS_lag19
+    - NUM. OF PROVIDERS_lag20
+    - NUM. OF PROVIDERS_lag21
+    - NUM. OF PROVIDERS_lag22
+    - NUM. OF PROVIDERS_lag23
+    - NUM. OF PROVIDERS_lag24
     - TOTAL PATIENTS_lag1
     - TOTAL PATIENTS_lag2
     - TOTAL PATIENTS_lag3
+    - TOTAL PATIENTS_lag4
+    - TOTAL PATIENTS_lag5
+    - TOTAL PATIENTS_lag6
+    - TOTAL PATIENTS_lag7
+    - TOTAL PATIENTS_lag8
+    - TOTAL PATIENTS_lag9
+    - TOTAL PATIENTS_lag10
+    - TOTAL PATIENTS_lag11
+    - TOTAL PATIENTS_lag12
+    - TOTAL PATIENTS_lag13
+    - TOTAL PATIENTS_lag14
+    - TOTAL PATIENTS_lag15
+    - TOTAL PATIENTS_lag16
+    - TOTAL PATIENTS_lag17
+    - TOTAL PATIENTS_lag18
+    - TOTAL PATIENTS_lag19
+    - TOTAL PATIENTS_lag20
+    - TOTAL PATIENTS_lag21
+    - TOTAL PATIENTS_lag22
+    - TOTAL PATIENTS_lag23
+    - TOTAL PATIENTS_lag24
   target_column: OT
   seed: 0
   normalizer: standard
@@ -219,6 +996,27 @@ security:
     - OT_lag1
     - OT_lag2
     - OT_lag3
+    - OT_lag4
+    - OT_lag5
+    - OT_lag6
+    - OT_lag7
+    - OT_lag8
+    - OT_lag9
+    - OT_lag10
+    - OT_lag11
+    - OT_lag12
+    - OT_lag13
+    - OT_lag14
+    - OT_lag15
+    - OT_lag16
+    - OT_lag17
+    - OT_lag18
+    - OT_lag19
+    - OT_lag20
+    - OT_lag21
+    - OT_lag22
+    - OT_lag23
+    - OT_lag24
   target_column: OT
   seed: 0
   normalizer: standard
@@ -236,6 +1034,27 @@ social_good:
     - OT_lag1
     - OT_lag2
     - OT_lag3
+    - OT_lag4
+    - OT_lag5
+    - OT_lag6
+    - OT_lag7
+    - OT_lag8
+    - OT_lag9
+    - OT_lag10
+    - OT_lag11
+    - OT_lag12
+    - OT_lag13
+    - OT_lag14
+    - OT_lag15
+    - OT_lag16
+    - OT_lag17
+    - OT_lag18
+    - OT_lag19
+    - OT_lag20
+    - OT_lag21
+    - OT_lag22
+    - OT_lag23
+    - OT_lag24
   target_column: OT
   seed: 0
   normalizer: standard
@@ -253,6 +1072,27 @@ traffic:
     - OT_lag1
     - OT_lag2
     - OT_lag3
+    - OT_lag4
+    - OT_lag5
+    - OT_lag6
+    - OT_lag7
+    - OT_lag8
+    - OT_lag9
+    - OT_lag10
+    - OT_lag11
+    - OT_lag12
+    - OT_lag13
+    - OT_lag14
+    - OT_lag15
+    - OT_lag16
+    - OT_lag17
+    - OT_lag18
+    - OT_lag19
+    - OT_lag20
+    - OT_lag21
+    - OT_lag22
+    - OT_lag23
+    - OT_lag24
   target_column: OT
   seed: 0
   normalizer: standard

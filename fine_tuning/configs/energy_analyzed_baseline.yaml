@@ -4,30 +4,219 @@ numeric_features:
 - OT_lag1
 - OT_lag2
 - OT_lag3
+- OT_lag4
+- OT_lag5
+- OT_lag6
+- OT_lag7
+- OT_lag8
+- OT_lag9
+- OT_lag10
+- OT_lag11
+- OT_lag12
+- OT_lag13
+- OT_lag14
+- OT_lag15
+- OT_lag16
+- OT_lag17
+- OT_lag18
+- OT_lag19
+- OT_lag20
+- OT_lag21
+- OT_lag22
+- OT_lag23
+- OT_lag24
 - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag1
 - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag2
 - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag3
+- Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag4
+- Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag5
+- Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag6
+- Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag7
+- Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag8
+- Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag9
+- Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag10
+- Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag11
+- Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag12
+- Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag13
+- Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag14
+- Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag15
+- Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag16
+- Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag17
+- Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag18
+- Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag19
+- Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag20
+- Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag21
+- Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag22
+- Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag23
+- Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag24
 - Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag1
 - Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag2
 - Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag3
+- Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag4
+- Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag5
+- Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag6
+- Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag7
+- Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag8
+- Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag9
+- Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag10
+- Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag11
+- Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag12
+- Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag13
+- Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag14
+- Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag15
+- Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag16
+- Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag17
+- Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag18
+- Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag19
+- Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag20
+- Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag21
+- Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag22
+- Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag23
+- Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag24
 - Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag1
 - Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag2
 - Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag3
+- Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag4
+- Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag5
+- Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag6
+- Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag7
+- Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag8
+- Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag9
+- Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag10
+- Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag11
+- Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag12
+- Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag13
+- Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag14
+- Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag15
+- Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag16
+- Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag17
+- Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag18
+- Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag19
+- Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag20
+- Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag21
+- Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag22
+- Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag23
+- Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag24
 - Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag1
 - Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag2
 - Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag3
+- Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag4
+- Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag5
+- Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag6
+- Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag7
+- Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag8
+- Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag9
+- Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag10
+- Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag11
+- Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag12
+- Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag13
+- Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag14
+- Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag15
+- Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag16
+- Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag17
+- Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag18
+- Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag19
+- Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag20
+- Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag21
+- Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag22
+- Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag23
+- Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag24
 - Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag1
 - Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag2
 - Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag3
+- Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag4
+- Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag5
+- Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag6
+- Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag7
+- Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag8
+- Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag9
+- Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag10
+- Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag11
+- Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag12
+- Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag13
+- Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag14
+- Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag15
+- Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag16
+- Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag17
+- Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag18
+- Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag19
+- Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag20
+- Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag21
+- Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag22
+- Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag23
+- Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag24
 - Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag1
 - Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag2
 - Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag3
+- Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag4
+- Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag5
+- Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag6
+- Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag7
+- Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag8
+- Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag9
+- Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag10
+- Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag11
+- Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag12
+- Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag13
+- Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag14
+- Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag15
+- Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag16
+- Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag17
+- Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag18
+- Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag19
+- Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag20
+- Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag21
+- Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag22
+- Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag23
+- Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag24
 - Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag1
 - Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag2
 - Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag3
+- Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag4
+- Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag5
+- Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag6
+- Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag7
+- Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag8
+- Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag9
+- Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag10
+- Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag11
+- Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag12
+- Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag13
+- Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag14
+- Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag15
+- Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag16
+- Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag17
+- Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag18
+- Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag19
+- Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag20
+- Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag21
+- Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag22
+- Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag23
+- Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag24
 - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag1
 - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag2
 - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag3
+- Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag4
+- Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag5
+- Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag6
+- Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag7
+- Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag8
+- Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag9
+- Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag10
+- Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag11
+- Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag12
+- Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag13
+- Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag14
+- Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag15
+- Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag16
+- Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag17
+- Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag18
+- Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag19
+- Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag20
+- Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag21
+- Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag22
+- Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag23
+- Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag24
 target_column: OT
 embedding_lags: []
 embedding_columns:

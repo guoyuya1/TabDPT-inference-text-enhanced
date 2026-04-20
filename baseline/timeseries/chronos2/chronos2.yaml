@@ -1,5 +1,5 @@
 bitcoin:
-  data_path: data/processed_data_time_features/bitcoin/bitcoin_gpt_analyzed_concise_text_lag_7_numeric_lag3.csv
+  data_path: /home/yuyan/tabdpt_mz/data/processed_data_time_features/bitcoin/bitcoin_gpt_analyzed_embedding.csv
   date_column: Date
   frequency: D
   normalizer: standard
@@ -15,7 +15,7 @@ bitcoin:
   test_ratio: 0.2
 
 economy:
-  data_path: data/processed_data_time_features/economy/economy_v3_gpt_summarized.csv
+  data_path: data/processed_data_time_features/economy/economy_v3_gpt_analyzed.csv
   date_column: date
   frequency: MS
   normalizer: standard

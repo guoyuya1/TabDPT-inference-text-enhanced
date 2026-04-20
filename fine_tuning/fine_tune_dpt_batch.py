@@ -37,6 +37,7 @@ try:
         load_and_split_fine_tune_data,
         prepare_fine_tune_trial,
         preprocess_features,
+        prediction_horizons,
         set_random_seeds,
     )
 except ImportError:
@@ -60,6 +61,7 @@ except ImportError:
         load_and_split_fine_tune_data,
         prepare_fine_tune_trial,
         preprocess_features,
+        prediction_horizons,
         set_random_seeds,
     )
 
@@ -124,9 +126,13 @@ def _call_quietly(fn, /, *args, **kwargs):
         return fn(*args, **kwargs)
 
 
-def run_fixed_horizon_batch(run_cfg, *, output_csv: str | None = None) -> dict[str, object]:
-    batch_horizon = resolve_batch_horizon(run_cfg.prediction_window)
-    print(f"batch_horizon={batch_horizon}")
+def run_fixed_horizon_batch(
+    run_cfg,
+    *,
+    horizon: int | None = None,
+) -> dict[str, object]:
+    batch_horizon = resolve_batch_horizon(horizon if horizon is not None else run_cfg.prediction_window)
+    print(f"\n{'=' * 16} Horizon {batch_horizon}/{run_cfg.prediction_window} {'=' * 16}")
 
     data_splits = load_and_split_fine_tune_data(run_cfg)
     prepared_trial = prepare_fine_tune_trial(run_cfg, data_splits=data_splits, horizon=batch_horizon)
@@ -263,37 +269,34 @@ def run_fixed_horizon_batch(run_cfg, *, output_csv: str | None = None) -> dict[s
             f"| prediction={record.prediction_real:.4f}"
         )
 
-    if output_csv is not None:
-        csv_rows: list[dict[str, object]] = []
-        csv_rows.extend(
-            records_to_csv_rows(
-                forecast_records=[],
-                slot_metrics=val_slot_metrics,
-                split_name="val",
-                overall_normalized=val_metrics[0],
-                overall_real=val_metrics[1],
-            )
+    csv_rows: list[dict[str, object]] = []
+    csv_rows.extend(
+        records_to_csv_rows(
+            forecast_records=[],
+            slot_metrics=val_slot_metrics,
+            split_name="val",
+            overall_normalized=val_metrics[0],
+            overall_real=val_metrics[1],
         )
-        csv_rows.extend(
-            records_to_csv_rows(
-                forecast_records=[],
-                slot_metrics=test_slot_metrics,
-                split_name="test",
-                overall_normalized=test_metrics[0],
-                overall_real=test_metrics[1],
-            )
+    )
+    csv_rows.extend(
+        records_to_csv_rows(
+            forecast_records=[],
+            slot_metrics=test_slot_metrics,
+            split_name="test",
+            overall_normalized=test_metrics[0],
+            overall_real=test_metrics[1],
         )
-        csv_rows.extend(
-            records_to_csv_rows(
-                forecast_records=forecast_records,
-                slot_metrics=[],
-                split_name="final_available",
-            )
+    )
+    csv_rows.extend(
+        records_to_csv_rows(
+            forecast_records=forecast_records,
+            slot_metrics=[],
+            split_name="final_available",
         )
-        output_path = Path(output_csv).expanduser().resolve()
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        pd.DataFrame(csv_rows).to_csv(output_path, index=False)
-        print(f"\noutput_csv={output_path}")
+    )
+    for row in csv_rows:
+        row["horizon"] = batch_horizon
 
     return {
         "batch_horizon": batch_horizon,
@@ -303,6 +306,7 @@ def run_fixed_horizon_batch(run_cfg, *, output_csv: str | None = None) -> dict[s
         "val_slot_metrics": val_slot_metrics,
         "test_slot_metrics": test_slot_metrics,
         "forecast_records": forecast_records,
+        "csv_rows": csv_rows,
     }
 
 
@@ -323,7 +327,38 @@ def main() -> None:
     else:
         print(f"Using dataset config {args.config}")
 
-    run_fixed_horizon_batch(run_cfg, output_csv=args.output_csv)
+    horizon_results = [
+        run_fixed_horizon_batch(run_cfg, horizon=horizon)
+        for horizon in prediction_horizons(run_cfg)
+    ]
+
+    if len(horizon_results) > 1:
+        print("\n================ Mean Summary Across Horizons ================")
+        mean_val_normalized = tuple(
+            float(np.mean([result["val_metrics"][0][idx] for result in horizon_results])) for idx in range(3)
+        )
+        mean_val_real = tuple(
+            float(np.mean([result["val_metrics"][1][idx] for result in horizon_results])) for idx in range(3)
+        )
+        mean_test_normalized = tuple(
+            float(np.mean([result["test_metrics"][0][idx] for result in horizon_results])) for idx in range(3)
+        )
+        mean_test_real = tuple(
+            float(np.mean([result["test_metrics"][1][idx] for result in horizon_results])) for idx in range(3)
+        )
+        _format_dual_metrics("Mean val (with text attn)", mean_val_normalized, mean_val_real)
+        _format_dual_metrics("Mean test (with text attn)", mean_test_normalized, mean_test_real)
+        print(
+            "Best epochs by horizon: "
+            + ", ".join(f"h{result['batch_horizon']}={result['best_epoch']}" for result in horizon_results)
+        )
+
+    if args.output_csv:
+        output_path = Path(args.output_csv).expanduser().resolve()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        csv_rows = [row for result in horizon_results for row in result["csv_rows"]]
+        pd.DataFrame(csv_rows).to_csv(output_path, index=False)
+        print(f"\noutput_csv={output_path}")
 
 
 if __name__ == "__main__":

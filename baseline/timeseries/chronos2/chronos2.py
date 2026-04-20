@@ -58,6 +58,18 @@ def inverse_transform_target(value: float, target_scaler: object | None) -> floa
     return float(target_scaler.inverse_transform(np.array([[value]], dtype=np.float64))[0, 0])
 
 
+def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
+    err = y_true - y_pred
+    mae = np.abs(err).mean()
+    rmse = np.sqrt(np.mean(err ** 2))
+    mape = np.mean(np.abs(err) / (np.abs(y_true) + 1e-8)) * 100
+    return {
+        "mae": float(mae),
+        "rmse": float(rmse),
+        "mape": float(mape),
+    }
+
+
 def read_cfg(config_path: str, dataset: str | None) -> dict:
     config_file = Path(config_path)
     if not config_file.is_absolute():
@@ -150,22 +162,38 @@ for dataset_name, cfg in all_cfgs.items():
         available_horizon = min(prediction_window, len(df) - i)
         for horizon_offset in range(available_horizon):
             target_idx = i + horizon_offset
-            y_pred = inverse_transform_target(fcst["mean"].iloc[horizon_offset], target_scaler)
+            y_pred_norm = float(fcst["mean"].iloc[horizon_offset])
+            y_pred = inverse_transform_target(y_pred_norm, target_scaler)
             y_true = raw_df.loc[target_idx, target_column]
+            y_true_norm = float(df.loc[target_idx, target_column])
             zero_shot_preds.append(
-                {"index": target_idx, "date": raw_df.loc[target_idx, date_column], "y_true": y_true, "y_pred": y_pred}
+                {
+                    "index": target_idx,
+                    "date": raw_df.loc[target_idx, date_column],
+                    "y_true": y_true,
+                    "y_pred": y_pred,
+                    "y_true_norm": y_true_norm,
+                    "y_pred_norm": y_pred_norm,
+                }
             )
 
     zero_shot_preds_df = pd.DataFrame(zero_shot_preds)
-    zero_shot_err = zero_shot_preds_df["y_true"] - zero_shot_preds_df["y_pred"]
-    zero_shot_mae = zero_shot_err.abs().mean()
-    zero_shot_rmse = np.sqrt(np.mean(zero_shot_err ** 2))
-    zero_shot_mape = np.mean(np.abs(zero_shot_err) / (np.abs(zero_shot_preds_df["y_true"]) + 1e-8)) * 100
+    zero_shot_metrics = compute_metrics(
+        zero_shot_preds_df["y_true"].to_numpy(dtype=np.float64),
+        zero_shot_preds_df["y_pred"].to_numpy(dtype=np.float64),
+    )
+    zero_shot_norm_metrics = compute_metrics(
+        zero_shot_preds_df["y_true_norm"].to_numpy(dtype=np.float64),
+        zero_shot_preds_df["y_pred_norm"].to_numpy(dtype=np.float64),
+    )
 
     print("baseline_1_zero_shot")
-    print("MAE:", zero_shot_mae)
-    print("RMSE:", zero_shot_rmse)
-    print("MAPE (%):", zero_shot_mape)
+    print("MAE:", zero_shot_metrics["mae"])
+    print("RMSE:", zero_shot_metrics["rmse"])
+    print("MAPE (%):", zero_shot_metrics["mape"])
+    print("Normalized MAE:", zero_shot_norm_metrics["mae"])
+    print("Normalized RMSE:", zero_shot_norm_metrics["rmse"])
+    print("Normalized MAPE (%):", zero_shot_norm_metrics["mape"])
 
     fine_tuned_predictor = TimeSeriesPredictor(
         target=target_column,
@@ -199,30 +227,50 @@ for dataset_name, cfg in all_cfgs.items():
         available_horizon = min(prediction_window, len(df) - i)
         for horizon_offset in range(available_horizon):
             target_idx = i + horizon_offset
-            y_pred = inverse_transform_target(fcst["mean"].iloc[horizon_offset], target_scaler)
+            y_pred_norm = float(fcst["mean"].iloc[horizon_offset])
+            y_pred = inverse_transform_target(y_pred_norm, target_scaler)
             y_true = raw_df.loc[target_idx, target_column]
+            y_true_norm = float(df.loc[target_idx, target_column])
             fine_tuned_preds.append(
-                {"index": target_idx, "date": raw_df.loc[target_idx, date_column], "y_true": y_true, "y_pred": y_pred}
+                {
+                    "index": target_idx,
+                    "date": raw_df.loc[target_idx, date_column],
+                    "y_true": y_true,
+                    "y_pred": y_pred,
+                    "y_true_norm": y_true_norm,
+                    "y_pred_norm": y_pred_norm,
+                }
             )
 
     fine_tuned_preds_df = pd.DataFrame(fine_tuned_preds)
-    fine_tuned_err = fine_tuned_preds_df["y_true"] - fine_tuned_preds_df["y_pred"]
-    fine_tuned_mae = fine_tuned_err.abs().mean()
-    fine_tuned_rmse = np.sqrt(np.mean(fine_tuned_err ** 2))
-    fine_tuned_mape = np.mean(np.abs(fine_tuned_err) / (np.abs(fine_tuned_preds_df["y_true"]) + 1e-8)) * 100
+    fine_tuned_metrics = compute_metrics(
+        fine_tuned_preds_df["y_true"].to_numpy(dtype=np.float64),
+        fine_tuned_preds_df["y_pred"].to_numpy(dtype=np.float64),
+    )
+    fine_tuned_norm_metrics = compute_metrics(
+        fine_tuned_preds_df["y_true_norm"].to_numpy(dtype=np.float64),
+        fine_tuned_preds_df["y_pred_norm"].to_numpy(dtype=np.float64),
+    )
 
     print("baseline_2_fine_tuned")
-    print("MAE:", fine_tuned_mae)
-    print("RMSE:", fine_tuned_rmse)
-    print("MAPE (%):", fine_tuned_mape)
+    print("MAE:", fine_tuned_metrics["mae"])
+    print("RMSE:", fine_tuned_metrics["rmse"])
+    print("MAPE (%):", fine_tuned_metrics["mape"])
+    print("Normalized MAE:", fine_tuned_norm_metrics["mae"])
+    print("Normalized RMSE:", fine_tuned_norm_metrics["rmse"])
+    print("Normalized MAPE (%):", fine_tuned_norm_metrics["mape"])
 
     summary_rows.append(
         {
             "dataset": dataset_name,
-            "baseline_1_zero_shot_mae": zero_shot_mae,
-            "baseline_1_zero_shot_rmse": zero_shot_rmse,
-            "baseline_2_fine_tuned_mae": fine_tuned_mae,
-            "baseline_2_fine_tuned_rmse": fine_tuned_rmse,
+            "baseline_1_zero_shot_mae": zero_shot_metrics["mae"],
+            "baseline_1_zero_shot_rmse": zero_shot_metrics["rmse"],
+            "baseline_1_zero_shot_norm_mae": zero_shot_norm_metrics["mae"],
+            "baseline_1_zero_shot_norm_rmse": zero_shot_norm_metrics["rmse"],
+            "baseline_2_fine_tuned_mae": fine_tuned_metrics["mae"],
+            "baseline_2_fine_tuned_rmse": fine_tuned_metrics["rmse"],
+            "baseline_2_fine_tuned_norm_mae": fine_tuned_norm_metrics["mae"],
+            "baseline_2_fine_tuned_norm_rmse": fine_tuned_norm_metrics["rmse"],
         }
     )
 
@@ -234,8 +282,16 @@ for row in summary_rows:
         row["baseline_1_zero_shot_mae"],
         "RMSE:",
         row["baseline_1_zero_shot_rmse"],
+        "Norm_MAE:",
+        row["baseline_1_zero_shot_norm_mae"],
+        "Norm_RMSE:",
+        row["baseline_1_zero_shot_norm_rmse"],
         "| baseline_2_fine_tuned MAE:",
         row["baseline_2_fine_tuned_mae"],
         "RMSE:",
         row["baseline_2_fine_tuned_rmse"],
+        "Norm_MAE:",
+        row["baseline_2_fine_tuned_norm_mae"],
+        "Norm_RMSE:",
+        row["baseline_2_fine_tuned_norm_rmse"],
     )
