@@ -1,0 +1,43 @@
+data_path: data/processed_data_time_features/agriculture/Agriculture_gpt_analyzed_embedding.csv
+date_column: date
+calendar_frequency: month
+seasonality_k: 3
+numeric_features:
+  - Wholesale broiler composite_lag1
+  - Wholesale broiler composite_lag2
+  - Retail-wholesale spread for broiler composite_lag1
+  - Retail-wholesale spread for broiler composite_lag2
+  - OT_lag1
+  - OT_lag2
+  - OT_lag3
+  - OT_lag4
+  - OT_lag5
+  - OT_lag6
+  - OT_lag7
+  - OT_lag8
+  - OT_lag9
+  - OT_lag10
+  - OT_lag11
+  - OT_lag12
+  - OT_lag13
+  - OT_lag14
+  - OT_lag15
+  - OT_lag16
+  - OT_lag17
+  - OT_lag18
+  - OT_lag19
+  - OT_lag20
+  - OT_lag21
+  - OT_lag22
+  - OT_lag23
+  - OT_lag24
+target_column: OT
+seed: 0
+normalizer: standard
+prediction_window: 6
+max_rows: 288
+context_ratio: 0.2
+train_ratio: 0.5
+val_ratio: 0.1
+test_ratio: 0.2
+max_context: 500

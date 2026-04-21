@@ -1,0 +1,16 @@
+bitcoin:
+  data_path: /home/yuyan/tabdpt_mz/data/processed_data_time_features/bitcoin/bitcoin_gpt_analyzed_embedding.csv
+  date_column: Date
+  frequency: D
+  normalizer: standard
+  numeric_features:
+    - Open
+    - High
+    - Low
+    - Volume
+  target_column: Close
+  prediction_window: 6
+  train_ratio: 0.7
+  val_ratio: 0.1
+  test_ratio: 0.2
+  max_rows: 1000

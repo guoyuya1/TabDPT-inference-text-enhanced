@@ -38,15 +38,37 @@ def normalize_by_train_split(
         raise ValueError("train_end must be positive when normalization is enabled")
 
     normalized_df = df.copy()
-    normalized_df.loc[:, columns] = normalized_df.loc[:, columns].astype(np.float64)
     scalers: dict[str, object] = {}
 
     for column in columns:
+        full_series = pd.to_numeric(df[column], errors="coerce").astype(np.float64)
+        normalized_df[column] = full_series
+        train_series = full_series.iloc[:train_end]
+        valid_train_mask = train_series.notna()
+        if not valid_train_mask.any():
+            print(
+                f"Skipping normalization for {column}: "
+                "no numeric training values after coercion."
+            )
+            normalized_df.loc[:, column] = full_series
+            continue
+
+        coerced_count = int(df[column].notna().sum() - full_series.notna().sum())
+        if coerced_count:
+            print(
+                f"Column {column}: coerced {coerced_count} non-numeric value(s) "
+                "to NaN before normalization."
+            )
+
         scaler = build_normalizer(normalizer_name)
-        train_values = df.iloc[:train_end][[column]].to_numpy(dtype=np.float64)
-        full_values = df[[column]].to_numpy(dtype=np.float64)
+        train_values = train_series.loc[valid_train_mask].to_numpy(dtype=np.float64).reshape(-1, 1)
         scaler.fit(train_values)
-        normalized_df.loc[:, column] = scaler.transform(full_values).reshape(-1)
+        normalized_values = full_series.copy()
+        valid_full_mask = full_series.notna()
+        normalized_values.loc[valid_full_mask] = scaler.transform(
+            full_series.loc[valid_full_mask].to_numpy(dtype=np.float64).reshape(-1, 1)
+        ).reshape(-1)
+        normalized_df.loc[:, column] = normalized_values
         scalers[column] = scaler
 
     return normalized_df, scalers

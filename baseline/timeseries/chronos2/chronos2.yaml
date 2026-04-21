@@ -61,16 +61,16 @@ climate:
   val_ratio: 0.1
   test_ratio: 0.2
 
-health_afr:
-  data_path: data/source_data/health_afr/raw/Health_AFR_with_text.csv
-  date_column: date
-  frequency: W-MON
-  normalizer: standard
-  target_column: OT
-  prediction_window: 6
-  train_ratio: 0.7
-  val_ratio: 0.1
-  test_ratio: 0.2
+# health_afr:
+#   data_path: data/source_data/health_afr/raw/Health_AFR_with_text.csv
+#   date_column: date
+#   frequency: W-MON
+#   normalizer: standard
+#   target_column: OT
+#   prediction_window: 6
+#   train_ratio: 0.7
+#   val_ratio: 0.1
+#   test_ratio: 0.2
 
 health_us:
   data_path: data/processed_data_time_features/health_us/Health_US_with_text_with_embeddings_Qwen-Qwen3-Embedding-8B_lag_14.csv
