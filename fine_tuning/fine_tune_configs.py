@@ -34,6 +34,21 @@ class TuningConfig:
     log_text_score_stats: bool = False
     text_score_sample_size: int = 8
     early_stopping_metric: str = "mae"
+    attention_dropout_p: float = 0.0
+    qk_norm_type: str = "layernorm"
+    text_attention_logit_l2: float = 0.0
+
+    def __post_init__(self) -> None:
+        if not 0.0 <= self.attention_dropout_p < 1.0:
+            raise ValueError("tuning.attention_dropout_p must be in the half-open interval [0.0, 1.0).")
+        normalized_qk_norm_type = self.qk_norm_type.lower()
+        if normalized_qk_norm_type not in {"layernorm", "rmsnorm", "none"}:
+            raise ValueError(
+                "tuning.qk_norm_type must be one of {'layernorm', 'rmsnorm', 'none'}."
+            )
+        if self.text_attention_logit_l2 < 0.0:
+            raise ValueError("tuning.text_attention_logit_l2 must be non-negative.")
+        object.__setattr__(self, "qk_norm_type", normalized_qk_norm_type)
 
 
 @dataclass(frozen=True)

@@ -30,6 +30,7 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.preprocessing import StandardScaler
 
 from tabdpt import TabDPTRegressor
+from tabdpt.model import _share_text_attention_modules
 from tabdpt.utils import pad_x
 
 try:
@@ -531,6 +532,11 @@ def prepare_fine_tune_trial(
         use_flash=run_cfg.model.use_flash,
         compile_model=run_cfg.model.compile_model,
     )
+    # Keep pure TabDPT baselines aligned with baseline/timeseries/tabdpt_tabpfn:
+    # do not inject fine-tuning attention regularization knobs (qk_norm/dropout)
+    # when text attention is disabled.
+    if not pure_tabdpt:
+        _configure_attention_regularization(reg, tuning_cfg=run_cfg.tuning)
     reg.fit(selected_splits.X_context, selected_splits.y_context, selected_splits.text_context)
 
     reduction_mode = None
@@ -840,6 +846,68 @@ def _set_text_attn_dropout_mode(
         seen_module_ids.add(id(dropout))
 
 
+def _resolve_base_model(model: torch.nn.Module) -> torch.nn.Module:
+    return getattr(model, "_orig_mod", model)
+
+
+def _attention_regularization_signature(tuning_cfg: TuningConfig) -> tuple[float, str]:
+    return (
+        float(tuning_cfg.attention_dropout_p),
+        tuning_cfg.qk_norm_type,
+    )
+
+
+def _configure_attention_regularization(
+    reg: TabDPTRegressor,
+    *,
+    tuning_cfg: TuningConfig,
+) -> None:
+    base_model = _resolve_base_model(reg.model)
+    signature = _attention_regularization_signature(tuning_cfg)
+    if getattr(base_model, "_attention_regularization_signature", None) == signature:
+        return
+
+    transformer_encoder = getattr(base_model, "transformer_encoder", None)
+    if transformer_encoder is None:
+        return
+
+    for block in transformer_encoder:
+        configure = getattr(block, "configure_attention_regularization", None)
+        if configure is None:
+            continue
+        configure(
+            attention_dropout_p=tuning_cfg.attention_dropout_p,
+            qk_norm_type=tuning_cfg.qk_norm_type,
+        )
+
+    _share_text_attention_modules(transformer_encoder)
+    setattr(base_model, "_attention_regularization_signature", signature)
+
+
+def _text_attention_logit_l2_penalty(
+    reg: TabDPTRegressor,
+    *,
+    text_train: torch.Tensor,
+    text_test: torch.Tensor,
+) -> torch.Tensor:
+    penalty_terms: list[torch.Tensor] = []
+    seen_module_groups: set[tuple[int, ...]] = set()
+
+    for _, block, text_modules in _get_text_enhanced_block_specs(reg):
+        logits_fn = getattr(block, "_text_attention_logits", None)
+        if logits_fn is None:
+            continue
+        module_group_key = tuple(id(module) for _, module in text_modules)
+        if module_group_key in seen_module_groups:
+            continue
+        penalty_terms.append(logits_fn(text_train, text_test).pow(2).mean())
+        seen_module_groups.add(module_group_key)
+
+    if not penalty_terms:
+        return text_train.new_zeros(())
+    return torch.stack(penalty_terms).mean()
+
+
 def _freeze_all_but_text_mixing(
     reg: TabDPTRegressor,
 ) -> tuple[list[torch.nn.Parameter], list[torch.nn.Parameter]]:
@@ -961,8 +1029,9 @@ def _text_module_param_summary(label: str, module: torch.nn.Module) -> str:
         w_val = weight.item() if weight.numel() == 1 else weight.mean().item()
         w_norm = weight.norm().item()
         line = f"{label}(||W||={w_norm:.3f}, mean={w_val:.6f}"
-        if weighted_module.bias is not None:
-            bias = weighted_module.bias.detach().float().cpu().reshape(-1)
+        bias_param = getattr(weighted_module, "bias", None)
+        if bias_param is not None:
+            bias = bias_param.detach().float().cpu().reshape(-1)
             b_val = bias.item() if bias.numel() == 1 else bias.mean().item()
             line += f", b={b_val:.3f}"
         line += ")"
@@ -981,9 +1050,10 @@ def _text_module_param_summary(label: str, module: torch.nn.Module) -> str:
         f"mean(mean)={weight_means.mean().item():.6f}"
     )
     bias_means = [
-        weighted_module.bias.detach().float().cpu().reshape(-1).mean().item()
+        bias_param.detach().float().cpu().reshape(-1).mean().item()
         for weighted_module in resolved_modules
-        if weighted_module.bias is not None
+        for bias_param in [getattr(weighted_module, "bias", None)]
+        if bias_param is not None
     ]
     if bias_means:
         line += f", b_mean={float(np.mean(bias_means)):.3f}"
@@ -1296,6 +1366,7 @@ def fine_tune_external_gate(
     if tuning_cfg.early_stopping_patience <= 0:
         raise ValueError("early_stopping_patience must be positive.")
 
+    _configure_attention_regularization(reg, tuning_cfg=tuning_cfg)
     _, gate_params, text_attn_params = freeze_all_but_last_text_mixing(reg)
     text_block_labels = ", ".join(layer_label for layer_label, _ in get_text_enhanced_gate_params(reg))
     optimizer = build_text_mixing_optimizer(
@@ -1307,6 +1378,8 @@ def fine_tune_external_gate(
         f"Tuning text-mixing params on blocks [{text_block_labels}] "
         f"(loss_type={tuning_cfg.loss_type}, gate_lr={tuning_cfg.gate_lr}, "
         f"text_attn_lr={tuning_cfg.text_attn_lr}, optimizer={optimizer.__class__.__name__}, "
+        f"attn_dropout={tuning_cfg.attention_dropout_p}, qk_norm={tuning_cfg.qk_norm_type}, "
+        f"text_logit_l2={tuning_cfg.text_attention_logit_l2}, "
         f"early_stopping_metric={tuning_cfg.early_stopping_metric}, "
         f"patience={tuning_cfg.early_stopping_patience})"
     )
@@ -1400,6 +1473,15 @@ def fine_tune_external_gate(
                     std_y,
                     tuning_cfg.loss_type,
                 )
+                if tuning_cfg.text_attention_logit_l2 > 0.0:
+                    point_loss = point_loss + (
+                        tuning_cfg.text_attention_logit_l2
+                        * _text_attention_logit_l2_penalty(
+                            reg,
+                            text_train=text_train_b,
+                            text_test=text_test_b,
+                        )
+                    )
                 (point_loss / current_batch_size).backward()
 
             optimizer.step()
