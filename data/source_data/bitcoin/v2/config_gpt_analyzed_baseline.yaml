@@ -17,8 +17,8 @@ target_columns:
 
 date_column: Date
 model_name: Qwen/Qwen3-Embedding-8B
-text_lag_days: 3
-numerical_lag_days: 3
+text_lag_days: 12
+numerical_lag_days: 24
 batch_size: 8
 max_length: 1024
 na_text: n/a
