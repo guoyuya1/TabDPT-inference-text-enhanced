@@ -1,5 +1,5 @@
 source_csv_path: Agriculture_with_text.csv
-target_output_path: ../../processed_data/agriculture/Agriculture_with_text_with_embeddings_{model_name}_lag_{lag}.csv
+target_output_path: /home/yuyan/tabdpt_mz/data/processed_data/agriculture/raw/Agriculture_with_text_embedding.csv
 
 text_columns:
   - search_fact

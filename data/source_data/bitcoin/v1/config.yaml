@@ -1,15 +1,24 @@
 source_csv_path: bitcoin_price_news.csv
-output_csv_path: ../../processed_data/bitcoin/bitcoin_final_with_embeddings_lag_5.csv
+target_output_path: /home/yuyan/tabdpt_mz/data/processed_data/bitcoin/raw/bitcoin_price_news_embedding.csv
 
 text_columns:
   - summary_gpt-5-mini
+
+numerical_columns:
+  - Open
+  - High
+  - Low
+  - Close
+  - Adj_Close
+  - Volume
 
 target_columns:
   - Close
 
 date_column: Date
-model_name: Qwen/Qwen3-Embedding-4B # Qwen/Qwen3-Embedding-0.6B
-lag_days: 5
+model_name: Qwen/Qwen3-Embedding-8B
+text_lag_days: 7
+numerical_lag_days: 24
 batch_size: 8
 max_length: 1024
 na_text: n/a

@@ -1,5 +1,5 @@
 source_csv_path: SocialGood_with_text.csv
-target_output_path: ../../processed_data/social_good/SocialGood_with_text_with_embeddings_{model_name}_lag_{lag}.csv
+target_output_path: ../../processed_data/social_good/raw/SocialGood_with_text_with_embeddings.csv
 
 text_columns:
   - search_fact
