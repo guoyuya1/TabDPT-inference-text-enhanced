@@ -1,4 +1,4 @@
-data_path: data/processed_data/agriculture/v3/agriculture_gpt_analyzed_embedding.csv
+data_path: data/processed_data/agriculture/raw/Agriculture_with_text_embedding.csv
 date_column: date
 calendar_frequency: month
 seasonality_k: 3
@@ -34,17 +34,17 @@ numeric_features:
 target_column: OT
 embedding_lags: []
 embedding_columns:
-- embedding_search_fact_summary_gpt_5_2_lag1
-- embedding_search_fact_summary_gpt_5_2_lag2
-- embedding_search_fact_summary_gpt_5_2_lag3
+- embedding_search_fact_lag1
+- embedding_search_fact_lag2
+- embedding_search_fact_lag3
 embedding_column_template: null
 seed: 0
 prediction_window: 6
 max_rows: 288
 context_ratio: 0.2
-train_ratio: 0.6
+train_ratio: 0.5
 val_ratio: 0.1
-test_ratio: 0.1
+test_ratio: 0.2
 model:
   device: auto
   model_weight_path: null
@@ -57,7 +57,7 @@ tuning:
   text_attn_lr: 0.01
   gate_logit_clamp: 10.0
   tune_batch_size: 256
-  max_context: 256
+  max_context: 500
   debug_text_effect: true
   log_text_mixing_params: true
   step_log_every: 50

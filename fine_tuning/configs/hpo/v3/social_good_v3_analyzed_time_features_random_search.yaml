@@ -1,4 +1,4 @@
-base_config: ../../v3/agriculture_v3_analyzed_time_features.yaml
+base_config: ../../v3/social_good_v3_analyzed_time_features.yaml
 base_dataset: null
 trials: 50
 seed: 0
@@ -18,6 +18,6 @@ search_space:
   gate_lr: [0.1]
   text_attn_lr: [0.001]
   gate_logit_clamp: [5.0]
-  tune_batch_size: [64, 128]
-  max_context: [64, 128, 256]
-
+  tune_batch_size: [64,128]
+  max_context: [64, 128, 256,]
+  embedding_lag_count: [1, 3]

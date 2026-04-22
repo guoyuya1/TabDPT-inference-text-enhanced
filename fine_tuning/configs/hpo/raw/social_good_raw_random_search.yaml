@@ -1,0 +1,22 @@
+base_config: ../../raw/social_good_v3_analyzed_time_features.yaml
+base_dataset: null
+trials: 50
+seed: 0
+max_parallel_trials: 8
+gpu_ids: [0, 1]
+top_k: 100
+search_space:
+  text_attn_layers:
+    - [16]
+    - [15, 16]
+    - [1, 16]
+    - [13, 14, 15, 16]
+    - [1, 2]
+    - [1, 2, 16]
+    - [4, 8, 12, 16]
+  epochs: [100]
+  gate_lr: [0.03, 0.05, 0.1, 0.2, 0.3]
+  text_attn_lr: [0.0003, 0.001, 0.003, 0.01, 0.03]
+  gate_logit_clamp: [5.0, 10.0]
+  tune_batch_size: [32, 64, 128, 256]
+  max_context: [64, 128, 256, 500]
