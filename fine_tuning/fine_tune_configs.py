@@ -37,6 +37,7 @@ class TuningConfig:
     attention_dropout_p: float = 0.0
     qk_norm_type: str = "layernorm"
     text_attention_logit_l2: float = 0.0
+    log_test_metrics_each_epoch: bool = False
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.attention_dropout_p < 1.0:

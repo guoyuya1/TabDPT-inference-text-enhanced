@@ -1288,6 +1288,7 @@ def _print_epoch_section(
     epoch: int,
     train_metrics: RollingMetrics,
     val_metrics: RollingMetrics,
+    test_metrics: RollingMetrics | None,
     param_stats: str,
 ) -> None:
     print(f"\n== Epoch {epoch:02d} ==")
@@ -1303,6 +1304,13 @@ def _print_epoch_section(
         (val_metrics.mae, val_metrics.rmse, val_metrics.mape),
         (val_metrics.real_mae, val_metrics.real_rmse, val_metrics.real_mape),
     )
+    if test_metrics is not None:
+        print(f"Test   | Loss [normalized]: {test_metrics.loss:.4f}")
+        _format_dual_metrics(
+            "Test",
+            (test_metrics.mae, test_metrics.rmse, test_metrics.mape),
+            (test_metrics.real_mae, test_metrics.real_rmse, test_metrics.real_mape),
+        )
     print(f"Params | {param_stats}")
 
 
@@ -1326,6 +1334,10 @@ def fine_tune_prepared_trial(
         y_val=splits.y_val,
         y_val_real=prepared_trial.raw_splits.y_val,
         text_val=splits.text_val,
+        X_test_proc=prepared_trial.X_test_proc,
+        y_test=splits.y_test,
+        y_test_real=prepared_trial.raw_splits.y_test,
+        text_test=splits.text_test,
         target_scaler=prepared_trial.target_scaler,
         prediction_horizon=prepared_trial.prediction_horizon,
     )
@@ -1339,14 +1351,18 @@ def fine_tune_external_gate(
     text_context: np.ndarray,
     X_train_proc: np.ndarray,
     y_train: np.ndarray,
-    y_train_real: np.ndarray,
+    y_train_real: np.ndarray | None = None,
     text_train: np.ndarray,
     tuning_cfg: TuningConfig,
     X_val_proc: np.ndarray,
     y_val: np.ndarray,
-    y_val_real: np.ndarray,
+    y_val_real: np.ndarray | None = None,
     text_val: np.ndarray,
-    target_scaler: StandardScaler | None,
+    X_test_proc: np.ndarray | None = None,
+    y_test: np.ndarray | None = None,
+    y_test_real: np.ndarray | None = None,
+    text_test: np.ndarray | None = None,
+    target_scaler: StandardScaler | None = None,
     prediction_horizon: int = 1,
 ) -> FineTuneOutcome:
     """
@@ -1365,6 +1381,18 @@ def fine_tune_external_gate(
     """
     if tuning_cfg.early_stopping_patience <= 0:
         raise ValueError("early_stopping_patience must be positive.")
+    if y_train_real is None:
+        y_train_real = y_train
+    if y_val_real is None:
+        y_val_real = y_val
+    if y_test_real is None and y_test is not None:
+        y_test_real = y_test
+    if tuning_cfg.log_test_metrics_each_epoch and (
+        X_test_proc is None or y_test is None or y_test_real is None or text_test is None
+    ):
+        raise ValueError(
+            "tuning.log_test_metrics_each_epoch requires X_test_proc, y_test, y_test_real, and text_test."
+        )
 
     _configure_attention_regularization(reg, tuning_cfg=tuning_cfg)
     _, gate_params, text_attn_params = freeze_all_but_last_text_mixing(reg)
@@ -1411,6 +1439,24 @@ def fine_tune_external_gate(
         "val",
         prediction_horizon,
     )
+    test_context_proc = test_y_context = test_text_context = None
+    if tuning_cfg.log_test_metrics_each_epoch:
+        test_context_proc, test_y_context, test_text_context, _, _, _ = build_history_and_eval_split(
+            X_context_proc,
+            X_train_proc,
+            X_val_proc,
+            X_test_proc,
+            y_context,
+            y_train,
+            y_val,
+            y_test,
+            text_context,
+            text_train,
+            text_val,
+            text_test,
+            "test",
+            prediction_horizon,
+        )
 
     for epoch in range(1, tuning_cfg.epochs + 1):
         _set_text_attn_dropout_mode(reg, enabled=True)
@@ -1541,10 +1587,39 @@ def fine_tune_external_gate(
             real_rmse=val_real_rmse,
             real_mape=val_real_mape,
         )
+        test_metrics = None
+        if tuning_cfg.log_test_metrics_each_epoch:
+            test_loss, test_mae, test_rmse, test_mape, test_real_mae, test_real_rmse, test_real_mape = (
+                _evaluate_rolling_loss_and_mae(
+                    reg,
+                    X_context_proc=test_context_proc,
+                    y_context=test_y_context,
+                    text_context=test_text_context,
+                    X_eval_proc=X_test_proc,
+                    y_eval=y_test,
+                    y_eval_real=y_test_real,
+                    text_eval=text_test,
+                    use_text=True,
+                    max_context=tuning_cfg.max_context,
+                    loss_type=tuning_cfg.loss_type,
+                    target_scaler=target_scaler,
+                    horizon=prediction_horizon,
+                )
+            )
+            test_metrics = RollingMetrics(
+                loss=test_loss,
+                mae=test_mae,
+                rmse=test_rmse,
+                mape=test_mape,
+                real_mae=test_real_mae,
+                real_rmse=test_real_rmse,
+                real_mape=test_real_mape,
+            )
         _print_epoch_section(
             epoch=epoch,
             train_metrics=train_metrics,
             val_metrics=val_metrics,
+            test_metrics=test_metrics,
             param_stats=param_stats,
         )
         _maybe_record_top_validation_mae_checkpoint(
