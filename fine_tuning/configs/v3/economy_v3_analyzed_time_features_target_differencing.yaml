@@ -1,7 +1,8 @@
-data_path: data/processed_data_time_features/economy/economy_v3_gpt_analyzed.csv
+data_path: data/processed_data/economy/v3/economy_v3_gpt_analyzed.csv
 date_column: date
 calendar_frequency: month
 seasonality_k: 3
+target_mode: target_differencing
 numeric_features:
 - Exports_lag1
 - Exports_lag2

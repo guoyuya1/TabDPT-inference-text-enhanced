@@ -179,9 +179,8 @@ def build_causal_fixed_origin_horizon_splits(
     - target calendar from timestamp t + h - 1
     - label y[t + h - 1]
 
-    Context rows are the initially observable prefix before the first unseen
-    source row. Train/val/test rows are source-row blocks, so the first eval row
-    in each split is the first unseen source row for that split.
+    Split membership is defined by the target row. Source rows near a boundary
+    are dropped when their horizon-shifted target would land in the next split.
     """
     if horizon <= 0:
         raise ValueError("horizon must be positive.")
@@ -229,10 +228,15 @@ def build_causal_fixed_origin_horizon_splits(
     train_end = n_context + n_train
     val_end = train_end + n_val
 
-    context_sources = np.arange(max(0, n_context - (horizon - 1)), dtype=np.int64)
-    train_sources = np.arange(n_context, train_end, dtype=np.int64)
-    val_sources = np.arange(train_end, val_end, dtype=np.int64)
-    test_sources = np.arange(val_end, n - (horizon - 1), dtype=np.int64)
+    context_sources = np.arange(0, n_context - horizon + 1, dtype=np.int64)
+    train_sources = np.arange(n_context, train_end - horizon + 1, dtype=np.int64)
+    val_sources = np.arange(train_end, val_end - horizon + 1, dtype=np.int64)
+    test_sources = np.arange(val_end, n - horizon + 1, dtype=np.int64)
+    if min(len(context_sources), len(train_sources), len(val_sources), len(test_sources)) <= 0:
+        raise ValueError(
+            "Horizon trimming produced an empty split: "
+            f"n={n}, context={n_context}, train={n_train}, val={n_val}, test={n_test}, horizon={horizon}"
+        )
 
     X_context, y_context, text_context = _build_source_target_rows(
         X_source=X_source,

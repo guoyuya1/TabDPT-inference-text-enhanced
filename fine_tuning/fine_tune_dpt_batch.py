@@ -224,7 +224,7 @@ def run_fixed_horizon_batch(
     _format_dual_metrics("Val (with text attn)", val_metrics[0], val_metrics[1])
     _format_dual_metrics("Test (with text attn)", test_metrics[0], test_metrics[1])
 
-    X_raw, y_raw, text_raw, timestamps = load_fine_tune_arrays(run_cfg)
+    X_raw, y_raw, text_raw, timestamps, _ = load_fine_tune_arrays(run_cfg)
     if timestamps is None:
         raise ValueError("Batch mode requires timestamps to generate future target calendars.")
     query_bundle = build_terminal_available_batch_queries(

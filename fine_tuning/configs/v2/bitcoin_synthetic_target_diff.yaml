@@ -3,6 +3,7 @@ date_column: Date
 calendar_frequency: month
 seasonality_k: 3
 target_mode: target_differencing
+
 numeric_features:
 - Open_lag1
 - Open_lag2
@@ -22,41 +23,46 @@ numeric_features:
 - target_lag1
 - target_lag2
 - target_lag3
+
 target_column: target
+
 embedding_lags: []
 embedding_columns:
 - embedding_summary_gpt-5-mini_lag1
 - embedding_summary_gpt-5-mini_lag2
 - embedding_summary_gpt-5-mini_lag3
 embedding_column_template: null
+
 seed: 0
-prediction_window: 6
+prediction_window: 1
 max_rows: 1000
 context_ratio: 0.2
 train_ratio: 0.5
 val_ratio: 0.1
 test_ratio: 0.2
+
 model:
   device: auto
   model_weight_path: null
   text_attn_layers: [16]
   use_flash: false
   compile_model: true
+
 tuning:
-  epochs: 100
-  gate_lr: 0.1
-  text_attn_lr: 0.01
-  gate_logit_clamp: 10.0
+  epochs: 200
+  loss_type: l1
+  gate_lr: 0.05
+  text_attn_lr: 0.03
+  gate_logit_clamp: 0.5
   tune_batch_size: 256
   max_context: 1000
   debug_text_effect: true
   log_text_mixing_params: true
   step_log_every: 50
-  early_stopping_patience: 10
+  early_stopping_metric: mae
+  early_stopping_patience: 100
   log_text_score_stats: true
   text_score_sample_size: 8
   attention_dropout_p: 0.1
   text_qk_norm: rmsnorm
   text_attention_logit_l2: 0.001
-  eval_each_epoch: true
-

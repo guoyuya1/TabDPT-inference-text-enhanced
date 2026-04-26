@@ -41,6 +41,45 @@ def _compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> tuple[float, flo
     return mae, rmse, mape
 
 
+def reconstruct_level_predictions_from_diffs(
+    *,
+    y_pred_diff: np.ndarray,
+    y_true_level: np.ndarray,
+    previous_level: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    pred_from_actual = np.zeros(len(y_pred_diff), dtype=np.float32)
+    pred_from_pred = np.zeros(len(y_pred_diff), dtype=np.float32)
+    prev_actual = float(previous_level)
+    prev_pred = float(previous_level)
+    for idx in range(len(y_pred_diff)):
+        diff_value = float(y_pred_diff[idx])
+        pred_from_actual[idx] = prev_actual + diff_value
+        pred_from_pred[idx] = prev_pred + diff_value
+        prev_actual = float(y_true_level[idx])
+        prev_pred = float(pred_from_pred[idx])
+    return pred_from_actual, pred_from_pred
+
+
+def _real_metrics_from_predictions(
+    *,
+    preds_norm: np.ndarray,
+    y_eval_real: np.ndarray,
+    target_scaler: object | None,
+    y_eval_level: np.ndarray | None = None,
+    previous_level: float | None = None,
+) -> tuple[np.ndarray, MetricTriplet]:
+    real_preds = _inverse_transform_targets(preds_norm, target_scaler)
+    if y_eval_level is None or previous_level is None:
+        return real_preds, _compute_metrics(y_eval_real, real_preds)
+
+    level_preds, _ = reconstruct_level_predictions_from_diffs(
+        y_pred_diff=real_preds,
+        y_true_level=y_eval_level.astype(np.float32, copy=False),
+        previous_level=previous_level,
+    )
+    return real_preds, _compute_metrics(y_eval_level, level_preds)
+
+
 def _inverse_transform_targets(
     y: np.ndarray,
     target_scaler: object | None,
@@ -259,6 +298,8 @@ def evaluate_rolling(
     max_context: int | None,
     target_scaler: object | None,
     horizon: int = 1,
+    y_eval_level: np.ndarray | None = None,
+    previous_level: float | None = None,
 ) -> DualMetricTriplet:
     """
     Rolling evaluation with a fixed context and a sequential eval window.
@@ -314,8 +355,13 @@ def evaluate_rolling(
             preds[idx] = pred.squeeze(-1).reshape(-1).detach().cpu().numpy()[0]
 
     normalized_metrics = _compute_metrics(y_eval, preds)
-    real_preds = _inverse_transform_targets(preds, target_scaler)
-    real_metrics = _compute_metrics(y_eval_real, real_preds)
+    _, real_metrics = _real_metrics_from_predictions(
+        preds_norm=preds,
+        y_eval_real=y_eval_real,
+        target_scaler=target_scaler,
+        y_eval_level=y_eval_level,
+        previous_level=previous_level,
+    )
     _format_dual_metrics(label, normalized_metrics, real_metrics)
     return normalized_metrics, real_metrics
 
@@ -335,6 +381,8 @@ def evaluate_rolling_pca(
     target_scaler: object | None,
     max_total_features: int = 100,
     horizon: int = 1,
+    y_eval_level: np.ndarray | None = None,
+    previous_level: float | None = None,
 ) -> DualMetricTriplet:
     """
     Rolling evaluation like `evaluate_rolling`, but appends PCA-compressed text features to X.
@@ -389,8 +437,13 @@ def evaluate_rolling_pca(
             preds[idx] = pred.squeeze(-1).reshape(-1).detach().cpu().numpy()[0]
 
     normalized_metrics = _compute_metrics(y_eval, preds)
-    real_preds = _inverse_transform_targets(preds, target_scaler)
-    real_metrics = _compute_metrics(y_eval_real, real_preds)
+    _, real_metrics = _real_metrics_from_predictions(
+        preds_norm=preds,
+        y_eval_real=y_eval_real,
+        target_scaler=target_scaler,
+        y_eval_level=y_eval_level,
+        previous_level=previous_level,
+    )
     _format_dual_metrics(label, normalized_metrics, real_metrics)
     return normalized_metrics, real_metrics
 
@@ -410,6 +463,8 @@ def evaluate_rolling_truncate_text(
     target_scaler: object | None,
     max_total_features: int = 100,
     horizon: int = 1,
+    y_eval_level: np.ndarray | None = None,
+    previous_level: float | None = None,
 ) -> tuple[DualMetricTriplet, str] | None:
     """
     Rolling evaluation like `evaluate_rolling_pca`, but uses the first k dims of each lag's
@@ -477,7 +532,12 @@ def evaluate_rolling_truncate_text(
             preds[idx] = pred.squeeze(-1).reshape(-1).detach().cpu().numpy()[0]
 
     normalized_metrics = _compute_metrics(y_eval, preds)
-    real_preds = _inverse_transform_targets(preds, target_scaler)
-    real_metrics = _compute_metrics(y_eval_real, real_preds)
+    _, real_metrics = _real_metrics_from_predictions(
+        preds_norm=preds,
+        y_eval_real=y_eval_real,
+        target_scaler=target_scaler,
+        y_eval_level=y_eval_level,
+        previous_level=previous_level,
+    )
     _format_dual_metrics(metric_label, normalized_metrics, real_metrics)
     return (normalized_metrics, real_metrics), metric_label

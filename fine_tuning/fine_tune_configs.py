@@ -35,20 +35,20 @@ class TuningConfig:
     text_score_sample_size: int = 8
     early_stopping_metric: str = "mae"
     attention_dropout_p: float = 0.0
-    qk_norm_type: str = "layernorm"
+    text_qk_norm: str = "layernorm"
     text_attention_logit_l2: float = 0.0
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.attention_dropout_p < 1.0:
             raise ValueError("tuning.attention_dropout_p must be in the half-open interval [0.0, 1.0).")
-        normalized_qk_norm_type = self.qk_norm_type.lower()
-        if normalized_qk_norm_type not in {"layernorm", "rmsnorm", "none"}:
+        normalized_text_qk_norm = self.text_qk_norm.lower()
+        if normalized_text_qk_norm not in {"layernorm", "rmsnorm", "none"}:
             raise ValueError(
-                "tuning.qk_norm_type must be one of {'layernorm', 'rmsnorm', 'none'}."
+                "tuning.text_qk_norm must be one of {'layernorm', 'rmsnorm', 'none'}."
             )
         if self.text_attention_logit_l2 < 0.0:
             raise ValueError("tuning.text_attention_logit_l2 must be non-negative.")
-        object.__setattr__(self, "qk_norm_type", normalized_qk_norm_type)
+        object.__setattr__(self, "text_qk_norm", normalized_text_qk_norm)
 
 
 @dataclass(frozen=True)
@@ -72,6 +72,7 @@ class DataConfig:
     model: ModelConfig
     tuning: TuningConfig
     prediction_window: int = 1
+    target_mode: str = "original"
 
 
 def _validate_positive_int(name: str, value: object) -> int:
@@ -121,6 +122,7 @@ def load_fine_tune_config(config_path: str, dataset_name: str | None) -> DataCon
     dataset_cfg.setdefault("embedding_lags", [])
     dataset_cfg.setdefault("embedding_columns", None)
     dataset_cfg.setdefault("embedding_column_template", None)
+    dataset_cfg.setdefault("target_mode", "original")
     missing_data_keys = [
         key
         for key, field in DataConfig.__dataclass_fields__.items()
@@ -159,10 +161,15 @@ def load_fine_tune_config(config_path: str, dataset_name: str | None) -> DataCon
             + ", ".join(unknown_model_keys)
         )
     dataset_cfg["model"] = ModelConfig(**model_cfg)
+    tuning_cfg = dict(dataset_cfg["tuning"])
+    if "qk_norm_type" in tuning_cfg:
+        if "text_qk_norm" in tuning_cfg:
+            raise ValueError("tuning must not define both 'qk_norm_type' and 'text_qk_norm'.")
+        tuning_cfg["text_qk_norm"] = tuning_cfg.pop("qk_norm_type")
     missing_tuning_keys = [
         key
         for key, field in TuningConfig.__dataclass_fields__.items()
-        if key not in dataset_cfg["tuning"]
+        if key not in tuning_cfg
         and field.default is MISSING
         and field.default_factory is MISSING
     ]
@@ -173,9 +180,9 @@ def load_fine_tune_config(config_path: str, dataset_name: str | None) -> DataCon
         )
     dataset_cfg["tuning"] = TuningConfig(
         **{
-            key: dataset_cfg["tuning"][key]
+            key: tuning_cfg[key]
             for key in TuningConfig.__dataclass_fields__
-            if key in dataset_cfg["tuning"]
+            if key in tuning_cfg
         }
     )
     dataset_cfg = {
@@ -191,4 +198,13 @@ def load_fine_tune_config(config_path: str, dataset_name: str | None) -> DataCon
         "prediction_window",
         dataset_cfg["prediction_window"],
     )
+    target_mode = str(dataset_cfg["target_mode"]).strip().lower()
+    allowed_target_modes = {"original", "target_differencing"}
+    if target_mode not in allowed_target_modes:
+        raise ValueError(
+            "target_mode must be one of "
+            + ", ".join(sorted(allowed_target_modes))
+            + f". Got: {dataset_cfg['target_mode']!r}"
+        )
+    dataset_cfg["target_mode"] = target_mode
     return DataConfig(**dataset_cfg)

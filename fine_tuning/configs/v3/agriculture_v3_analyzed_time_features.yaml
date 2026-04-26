@@ -65,5 +65,5 @@ tuning:
   log_text_score_stats: true
   text_score_sample_size: 8
   attention_dropout_p: 0.1
-  qk_norm_type: rmsnorm
+  text_qk_norm: rmsnorm
   text_attention_logit_l2: 0.001

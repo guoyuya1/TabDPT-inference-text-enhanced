@@ -363,19 +363,34 @@ def _infer_lag_prefix_from_template(template: str, *, label: str) -> str:
 def discover_lag_search_metadata(base_run_cfg: DataConfig) -> LagSearchMetadata:
     header = _read_csv_header(base_run_cfg.data_path)
 
-    target_lag_pattern = re.compile(rf"^{re.escape(base_run_cfg.target_column)}_lag(\d+)$")
-    available_target_lags = {
-        int(match.group(1))
-        for column in header
-        if (match := target_lag_pattern.fullmatch(column)) is not None
-    }
+    target_lag_prefix_candidates = [base_run_cfg.target_column]
+    if base_run_cfg.target_mode == "target_differencing":
+        target_lag_prefix_candidates.insert(0, "target_diff")
 
-    base_target_lag_columns = [
-        column
-        for column in base_run_cfg.numeric_features
-        if target_lag_pattern.fullmatch(column) is not None
-    ]
-    base_target_lag_count = len(base_target_lag_columns) or None
+    resolved_target_lag_prefix: str | None = None
+    available_target_lags: set[int] = set()
+    base_target_lag_count: int | None = None
+    for target_lag_prefix in target_lag_prefix_candidates:
+        target_lag_pattern = re.compile(rf"^{re.escape(target_lag_prefix)}_lag(\d+)$")
+        base_target_lag_columns = [
+            column
+            for column in base_run_cfg.numeric_features
+            if target_lag_pattern.fullmatch(column) is not None
+        ]
+        if not base_target_lag_columns:
+            continue
+        resolved_target_lag_prefix = target_lag_prefix
+        base_target_lag_count = len(base_target_lag_columns)
+        available_target_lags = {
+            int(match.group(1))
+            for column in header
+            if (match := target_lag_pattern.fullmatch(column)) is not None
+        }
+        break
+    if resolved_target_lag_prefix is None:
+        resolved_target_lag_prefix = (
+            "target_diff" if base_run_cfg.target_mode == "target_differencing" else base_run_cfg.target_column
+        )
 
     embedding_lag_prefix: str | None
     base_embedding_lag_count: int | None
@@ -411,7 +426,7 @@ def discover_lag_search_metadata(base_run_cfg: DataConfig) -> LagSearchMetadata:
         )
 
     return LagSearchMetadata(
-        target_lag_prefix=base_run_cfg.target_column,
+        target_lag_prefix=resolved_target_lag_prefix,
         base_target_lag_count=base_target_lag_count,
         available_target_lag_count=_contiguous_lag_count(available_target_lags),
         embedding_lag_prefix=embedding_lag_prefix,
@@ -524,15 +539,22 @@ def _trial_data_cache_key(
 
 
 def trial_spec_target_lag_count(run_cfg: DataConfig) -> int | None:
-    target_lag_pattern = re.compile(rf"^{re.escape(run_cfg.target_column)}_lag(\d+)$")
-    count = _contiguous_lag_count(
-        {
-            int(match.group(1))
-            for feature in run_cfg.numeric_features
-            if (match := target_lag_pattern.fullmatch(feature)) is not None
-        }
-    )
-    return count or None
+    target_lag_prefix_candidates = [run_cfg.target_column]
+    if run_cfg.target_mode == "target_differencing":
+        target_lag_prefix_candidates.insert(0, "target_diff")
+
+    for target_lag_prefix in target_lag_prefix_candidates:
+        target_lag_pattern = re.compile(rf"^{re.escape(target_lag_prefix)}_lag(\d+)$")
+        count = _contiguous_lag_count(
+            {
+                int(match.group(1))
+                for feature in run_cfg.numeric_features
+                if (match := target_lag_pattern.fullmatch(feature)) is not None
+            }
+        )
+        if count > 0:
+            return count
+    return None
 
 
 def trial_spec_embedding_lag_count(run_cfg: DataConfig) -> int | None:
