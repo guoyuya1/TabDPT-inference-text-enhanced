@@ -8,3 +8,5 @@ eval_output/
 *.txt
 results/
 logs/
+fine_tuning/outputs/*
+tests/  
