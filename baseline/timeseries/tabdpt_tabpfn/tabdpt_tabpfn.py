@@ -458,26 +458,14 @@ def build_history_and_eval_split(
     if horizon <= 0:
         raise ValueError("horizon must be positive.")
 
-    def _trim_history_tail(X_hist: np.ndarray, y_hist: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        trim = max(0, horizon - 1)
-        if trim == 0:
-            return X_hist, y_hist
-        if trim >= len(y_hist):
-            return X_hist[:0], y_hist[:0]
-        return X_hist[:-trim], y_hist[:-trim]
-
     if split_name == "train":
         return X_context, y_context, X_train, y_train
     if split_name == "val":
-        X_hist, y_hist = _trim_history_tail(
-            np.concatenate((X_context, X_train), axis=0),
-            np.concatenate((y_context, y_train), axis=0),
-        )
+        X_hist = np.concatenate((X_context, X_train), axis=0)
+        y_hist = np.concatenate((y_context, y_train), axis=0)
         return X_hist, y_hist, X_val, y_val
-    X_hist, y_hist = _trim_history_tail(
-        np.concatenate((X_context, X_train, X_val), axis=0),
-        np.concatenate((y_context, y_train, y_val), axis=0),
-    )
+    X_hist = np.concatenate((X_context, X_train, X_val), axis=0)
+    y_hist = np.concatenate((y_context, y_train, y_val), axis=0)
     return X_hist, y_hist, X_test, y_test
 
 

@@ -1,0 +1,424 @@
+# bitcoin:
+#   data_path: /home/yuyan/tabdpt_mz/data/processed_data_time_features/bitcoin/bitcoin_gpt_analyzed_embedding.csv
+#   date_column: Date
+#   calendar_frequency: day
+#   seasonality_k: 3
+#   numeric_features:
+#     - Open_lag1
+#     - Open_lag2
+#     - High_lag1
+#     - High_lag2
+#     - Low_lag1
+#     - Low_lag2
+#     - Close_lag1
+#     - Close_lag2
+#     - Adj_Close_lag1
+#     - Adj_Close_lag2
+#     - Adj_Close_lag3
+#     - Adj_Close_lag4
+#     - Adj_Close_lag5
+#     - Adj_Close_lag6
+#     - Adj_Close_lag7
+#     - Adj_Close_lag8
+#     - Adj_Close_lag9
+#     - Adj_Close_lag10
+#     - Adj_Close_lag11
+#     - Adj_Close_lag12
+#     - Adj_Close_lag13
+#     - Adj_Close_lag14
+#     - Adj_Close_lag15
+#     - Adj_Close_lag16
+#     - Adj_Close_lag17
+#     - Adj_Close_lag18
+#     - Adj_Close_lag19
+#     - Adj_Close_lag20
+#     - Adj_Close_lag21
+#     - Adj_Close_lag22
+#     - Adj_Close_lag23
+#     - Adj_Close_lag24
+#     - Volume_lag1
+#     - Volume_lag2
+#   target_column: Adj_Close
+#   seed: 0
+#   normalizer: standard
+#   prediction_window: 6
+#   start_idx: 0
+#   end_idx: 1000
+#   context_ratio: 0.2
+#   train_ratio: 0.5
+#   val_ratio: 0.1
+#   test_ratio: 0.2
+#   max_context: 2000
+
+# social_good:
+#   data_path: data/processed_data/social_good/v3/social_good_gpt_analyzed_embedding.csv
+#   date_column: date
+#   calendar_frequency: month
+#   seasonality_k: 3
+#   numeric_features:
+#     - OT_lag1
+#     - OT_lag2
+#     - OT_lag3
+#     - OT_lag4
+#     - OT_lag5
+#     - OT_lag6
+#     - OT_lag7
+#     - OT_lag8
+#     - OT_lag9
+#     - OT_lag10
+#     - OT_lag11
+#     - OT_lag12
+#     - OT_lag13
+#     - OT_lag14
+#     - OT_lag15
+#     - OT_lag16
+#     - OT_lag17
+#     - OT_lag18
+#     - OT_lag19
+#     - OT_lag20
+#     - OT_lag21
+#     - OT_lag22
+#     - OT_lag23
+#     - OT_lag24
+#   target_column: OT
+#   seed: 0
+#   normalizer: standard
+#   prediction_window: 6
+#   context_ratio: 0.2
+#   train_ratio: 0.6
+#   val_ratio: 0.1
+#   test_ratio: 0.1
+#   max_context: 256
+#   start_idx: 0
+#   end_idx: 288
+
+agriculture:
+  data_path: data/processed_data/agriculture/v3/agriculture_gpt_analyzed_embedding.csv
+  date_column: date
+  calendar_frequency: month
+  seasonality_k: 3
+  numeric_features:
+    - Wholesale broiler composite_lag1
+    - Wholesale broiler composite_lag2
+    - Retail-wholesale spread for broiler composite_lag1
+    - Retail-wholesale spread for broiler composite_lag2
+  target_column: OT
+  seed: 0
+  normalizer: standard
+  prediction_window: 6
+  context_ratio: 0.2
+  train_ratio: 0.6
+  val_ratio: 0.1
+  test_ratio: 0.1
+  max_context: 256
+  start_idx: 0
+  end_idx: 288
+
+# climate:
+#   data_path: data/processed_data_time_features/climate/Climate_with_text_with_embeddings_Qwen-Qwen3-Embedding-8B_lag_14.csv
+#   date_column: date
+#   calendar_frequency: month
+#   seasonality_k: 3
+#   numeric_features:
+#     - MapDate_lag1
+#     - MapDate_lag2
+#     - D0_lag1
+#     - D0_lag2
+#     - D1_lag1
+#     - D1_lag2
+#     - D2_lag1
+#     - D2_lag2
+#     - D3_lag1
+#     - D3_lag2
+#     - D4_lag1
+#     - D4_lag2
+#     - StatisticFormatID_lag1
+#     - StatisticFormatID_lag2
+#   target_column: OT
+#   seed: 0
+#   normalizer: standard
+#   prediction_window: 6
+#   context_ratio: 0.2
+#   train_ratio: 0.5
+#   val_ratio: 0.1
+#   test_ratio: 0.2
+#   max_context: 2000
+
+# economy:
+#   data_path: data/processed_data_time_features/economy/economy_v3_gpt_analyzed.csv
+#   date_column: date
+#   calendar_frequency: month
+#   seasonality_k: 3
+#   numeric_features:
+#     - Exports_lag1
+#     - Exports_lag2
+#     - Imports_lag1
+#     - Imports_lag2
+#     - OT_lag1
+#     - OT_lag2
+#     - OT_lag3
+#     - OT_lag4
+#     - OT_lag5
+#     - OT_lag6
+#     - OT_lag7
+#     - OT_lag8
+#     - OT_lag9
+#     - OT_lag10
+#     - OT_lag11
+#     - OT_lag12
+#     - OT_lag13
+#     - OT_lag14
+#     - OT_lag15
+#     - OT_lag16
+#     - OT_lag17
+#     - OT_lag18
+#     - OT_lag19
+#     - OT_lag20
+#     - OT_lag21
+#     - OT_lag22
+#     - OT_lag23
+#     - OT_lag24
+#   target_column: OT
+#   seed: 0
+#   normalizer: standard
+#   prediction_window: 6
+#   context_ratio: 0.2
+#   train_ratio: 0.5
+#   val_ratio: 0.1
+#   test_ratio: 0.2
+#   max_context: 2000
+
+# energy:
+#   data_path: /home/yuyan/tabdpt_mz/data/processed_data_time_features/energy/Energy_gpt_analyzed_embedding.csv
+#   date_column: date
+#   calendar_frequency: week
+#   seasonality_k: 3
+#   numeric_features:
+#     - OT_lag1
+#     - OT_lag2
+#     - OT_lag3
+#     - OT_lag4
+#     - OT_lag5
+#     - OT_lag6
+#     - OT_lag7
+#     - OT_lag8
+#     - OT_lag9
+#     - OT_lag10
+#     - OT_lag11
+#     - OT_lag12
+#     - OT_lag13
+#     - OT_lag14
+#     - OT_lag15
+#     - OT_lag16
+#     - OT_lag17
+#     - OT_lag18
+#     - OT_lag19
+#     - OT_lag20
+#     - OT_lag21
+#     - OT_lag22
+#     - OT_lag23
+#     - OT_lag24
+#     - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag1
+#     - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag2
+#     - Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag1
+#     - Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag2
+#     - Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag1
+#     - Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag2
+#     - Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag1
+#     - Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag2
+#     - Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag1
+#     - Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag2
+#     - Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag1
+#     - Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag2
+#     - Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag1
+#     - Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag2
+#     - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag1
+#     - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)_lag2
+#   target_column: OT
+#   seed: 0
+#   normalizer: standard
+#   prediction_window: 6
+#   context_ratio: 0.2
+#   train_ratio: 0.5
+#   val_ratio: 0.1
+#   test_ratio: 0.2
+#   max_context: 2000
+
+# environment:
+#   data_path: data/processed_data_time_features/environment/Environment_with_text_with_embeddings_Qwen-Qwen3-Embedding-8B_lag_14.csv
+#   date_column: date
+#   calendar_frequency: month
+#   seasonality_k: 3
+#   numeric_features:
+#     - CBSA Code_lag1
+#     - CBSA Code_lag2
+#     - CBSA Code_lag3
+#     - CBSA Code_lag4
+#     - CBSA Code_lag5
+#     - CBSA Code_lag6
+#     - CBSA Code_lag7
+#     - CBSA Code_lag8
+#     - CBSA Code_lag9
+#     - CBSA Code_lag10
+#     - CBSA Code_lag11
+#     - CBSA Code_lag12
+#     - CBSA Code_lag13
+#     - CBSA Code_lag14
+#     - CBSA Code_lag15
+#     - CBSA Code_lag16
+#     - CBSA Code_lag17
+#     - CBSA Code_lag18
+#     - CBSA Code_lag19
+#     - CBSA Code_lag20
+#     - CBSA Code_lag21
+#     - CBSA Code_lag22
+#     - CBSA Code_lag23
+#     - CBSA Code_lag24
+#     - Number of Sites Reporting_lag1
+#     - Number of Sites Reporting_lag2
+#     - Number of Sites Reporting_lag3
+#     - Number of Sites Reporting_lag4
+#     - Number of Sites Reporting_lag5
+#     - Number of Sites Reporting_lag6
+#     - Number of Sites Reporting_lag7
+#     - Number of Sites Reporting_lag8
+#     - Number of Sites Reporting_lag9
+#     - Number of Sites Reporting_lag10
+#     - Number of Sites Reporting_lag11
+#     - Number of Sites Reporting_lag12
+#     - Number of Sites Reporting_lag13
+#     - Number of Sites Reporting_lag14
+#     - Number of Sites Reporting_lag15
+#     - Number of Sites Reporting_lag16
+#     - Number of Sites Reporting_lag17
+#     - Number of Sites Reporting_lag18
+#     - Number of Sites Reporting_lag19
+#     - Number of Sites Reporting_lag20
+#     - Number of Sites Reporting_lag21
+#     - Number of Sites Reporting_lag22
+#     - Number of Sites Reporting_lag23
+#     - Number of Sites Reporting_lag24
+#   target_column: OT
+#   seed: 0
+#   normalizer: standard
+#   prediction_window: 6
+#   context_ratio: 0.2
+#   train_ratio: 0.5
+#   val_ratio: 0.1
+#   test_ratio: 0.2
+#   max_context: 2000
+
+# health_us:
+#   data_path: data/processed_data_time_features/health_us/Health_US_with_text_with_embeddings_Qwen-Qwen3-Embedding-8B_lag_14.csv
+#   date_column: date
+#   calendar_frequency: week
+#   seasonality_k: 3
+#   numeric_features:
+#     - YEAR_lag1
+#     - YEAR_lag2
+#     - WEEK_lag1
+#     - WEEK_lag2
+#     - "% WEIGHTED ILI_lag1"
+#     - "% WEIGHTED ILI_lag2"
+#     - AGE 0-4_lag1
+#     - AGE 0-4_lag2
+#     - AGE 5-24_lag1
+#     - AGE 5-24_lag2
+#     - AGE 65_lag1
+#     - AGE 65_lag2
+#     - ILITOTAL_lag1
+#     - ILITOTAL_lag2
+#     - NUM. OF PROVIDERS_lag1
+#     - NUM. OF PROVIDERS_lag2
+#     - TOTAL PATIENTS_lag1
+#     - TOTAL PATIENTS_lag2
+#   target_column: OT
+#   seed: 0
+#   normalizer: standard
+#   prediction_window: 6
+#   context_ratio: 0.2
+#   train_ratio: 0.5
+#   val_ratio: 0.1
+#   test_ratio: 0.2
+#   max_context: 2000
+
+# security:
+#   data_path: data/processed_data_time_features/security/Security_with_text_with_embeddings_Qwen-Qwen3-Embedding-8B_lag_14.csv
+#   date_column: date
+#   calendar_frequency: month
+#   seasonality_k: 3
+#   numeric_features:
+#     - OT_lag1
+#     - OT_lag2
+#     - OT_lag3
+#     - OT_lag4
+#     - OT_lag5
+#     - OT_lag6
+#     - OT_lag7
+#     - OT_lag8
+#     - OT_lag9
+#     - OT_lag10
+#     - OT_lag11
+#     - OT_lag12
+#     - OT_lag13
+#     - OT_lag14
+#     - OT_lag15
+#     - OT_lag16
+#     - OT_lag17
+#     - OT_lag18
+#     - OT_lag19
+#     - OT_lag20
+#     - OT_lag21
+#     - OT_lag22
+#     - OT_lag23
+#     - OT_lag24
+#   target_column: OT
+#   seed: 0
+#   normalizer: standard
+#   prediction_window: 6
+#   context_ratio: 0.2
+#   train_ratio: 0.5
+#   val_ratio: 0.1
+#   test_ratio: 0.2
+#   max_context: 2000
+
+
+# traffic:
+#   data_path: data/processed_data_time_features/traffic/Traffic_with_text_with_embeddings_Qwen-Qwen3-Embedding-8B_lag_14.csv
+#   date_column: date
+#   calendar_frequency: month
+#   seasonality_k: 3
+#   numeric_features:
+#     - OT_lag1
+#     - OT_lag2
+#     - OT_lag3
+#     - OT_lag4
+#     - OT_lag5
+#     - OT_lag6
+#     - OT_lag7
+#     - OT_lag8
+#     - OT_lag9
+#     - OT_lag10
+#     - OT_lag11
+#     - OT_lag12
+#     - OT_lag13
+#     - OT_lag14
+#     - OT_lag15
+#     - OT_lag16
+#     - OT_lag17
+#     - OT_lag18
+#     - OT_lag19
+#     - OT_lag20
+#     - OT_lag21
+#     - OT_lag22
+#     - OT_lag23
+#     - OT_lag24
+#   target_column: OT
+#   seed: 0
+#   normalizer: standard
+#   prediction_window: 6
+#   context_ratio: 0.2
+#   train_ratio: 0.5
+#   val_ratio: 0.1
+#   test_ratio: 0.2
+#   max_context: 2000
