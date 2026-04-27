@@ -1,0 +1,27 @@
+data_path: /home/yuyan/tabdpt_mz/data/processed_data/agriculture/v3/agriculture_gpt_analyzed_embedding.csv
+date_column: date
+calendar_frequency: month
+seasonality_k: 3
+numeric_features:
+  - Wholesale broiler composite
+  - Retail-wholesale spread for broiler composite
+  - OT
+target_column: OT
+embedding_lags: []
+embedding_columns: null
+embedding_column_template: null
+seed: 0
+prediction_window: 6
+max_rows: 120
+context_ratio: 0.2
+train_ratio: 0.6
+val_ratio: 0.1
+test_ratio: 0.1
+
+feature_search:
+  max_context: [16, 32, 64, 128]
+  target_lag_count: [2, 4, 6, 8, 12, 16]
+  covariate_lag_count: [0, 1, 2, 4]
+  include_calendar_features: true
+  include_seasonal_features: true
+  normalize: true

@@ -31,18 +31,18 @@ numeric_features:
 - OT_lag10
 - OT_lag11
 - OT_lag12
-- OT_lag13
-- OT_lag14
-- OT_lag15
-- OT_lag16
-- OT_lag17
-- OT_lag18
-- OT_lag19
-- OT_lag20
-- OT_lag21
-- OT_lag22
-- OT_lag23
-- OT_lag24
+# - OT_lag13
+# - OT_lag14
+# - OT_lag15
+# - OT_lag16
+# - OT_lag17
+# - OT_lag18
+# - OT_lag19
+# - OT_lag20
+# - OT_lag21
+# - OT_lag22
+# - OT_lag23
+# - OT_lag24
 target_column: OT
 embedding_lags: []
 embedding_columns:

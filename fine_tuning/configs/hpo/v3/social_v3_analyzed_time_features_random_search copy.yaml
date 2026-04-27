@@ -2,21 +2,22 @@ base_config: /home/yuyan/tabdpt_mz/fine_tuning/configs/v3/socialgoods_v3_analyze
 base_dataset: null
 trials: 100
 seed: 0
-max_parallel_trials: 8
+max_parallel_trials: 16
 gpu_ids: [0, 1]
 top_k: 100
 search_space:
   text_attn_layers:
     - [16]
-    - [15, 16]
-    - [1, 16]
+    # - [15, 16]
+    # - [1, 16]
     - [13, 14, 15, 16]
     - [1, 2]
     - [1, 2, 16]
-    - [4, 8, 12, 16]
+    # - [4, 8, 12, 16]
   epochs: [100]
   gate_lr: [0.01, 0.05, 0.1]
   text_attn_lr: [0.0003, 0.001, 0.003, 0.01]
   gate_logit_clamp: [5.0]
   tune_batch_size: [8, 16, 32, 64, 128]
-  max_context: [16, 32, 64, 128]
+  max_context: [64]
+  target_lag_count: [2,4,6, 8,12]

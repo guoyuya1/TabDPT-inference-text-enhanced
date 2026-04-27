@@ -183,8 +183,8 @@ class TabDPTEstimator(BaseEstimator):
             self.has_missing_indicator = inds.any(axis=0)
             inds = inds[:, self.has_missing_indicator].astype(float)
             X = np.hstack((X, inds))
-
         self.imputer = SimpleImputer(strategy="mean")
+        # self.imputer = SimpleImputer(strategy="mean", keep_empty_features=True)
         X = self.imputer.fit_transform(X)
         if self.scaler:
             X = self.scaler.fit_transform(X)
