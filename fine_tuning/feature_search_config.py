@@ -57,7 +57,11 @@ class FeatureSearchConfig:
         object.__setattr__(
             self,
             "target_lag_count",
-            _validate_choice_ints("feature_search.target_lag_count", self.target_lag_count),
+            _validate_choice_ints(
+                "feature_search.target_lag_count",
+                self.target_lag_count,
+                allow_zero_values=True,
+            ),
         )
         object.__setattr__(
             self,

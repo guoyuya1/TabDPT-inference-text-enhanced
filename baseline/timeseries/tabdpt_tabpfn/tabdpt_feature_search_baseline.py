@@ -357,17 +357,17 @@ def resolve_feature_search_numeric_features(
 ) -> list[str]:
     covariate_prefixes = {family.prefix for family in lag_metadata.covariate_families}
     resolved_numeric_features: list[str] = []
-    target_inserted = False
     inserted_covariates: set[str] = set()
+    saw_target_family = False
 
     for feature_name in run_cfg.numeric_features:
         family_name = _feature_family_name(feature_name)
         if family_name == lag_metadata.target_lag_prefix:
-            if not target_inserted:
+            saw_target_family = True
+            if target_lag_count > 0:
                 resolved_numeric_features.extend(
                     f"{lag_metadata.target_lag_prefix}_lag{lag}" for lag in range(1, target_lag_count + 1)
                 )
-                target_inserted = True
             continue
 
         if family_name in covariate_prefixes:
@@ -380,7 +380,7 @@ def resolve_feature_search_numeric_features(
 
         resolved_numeric_features.append(feature_name)
 
-    if not target_inserted:
+    if not saw_target_family:
         raise ValueError(
             "Unable to resolve target lag block because the base config does not contain "
             f"any '{lag_metadata.target_lag_prefix}_lagN' numeric features."
