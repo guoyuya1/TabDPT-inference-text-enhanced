@@ -1,4 +1,4 @@
-base_config: ../../v3/bitcoin_v3_analyzed_time_features.yaml
+base_config: /home/yuyan/tabdpt_mz/fine_tuning/configs/v3/socialgoods_v3_analyzed.yaml
 base_dataset: null
 trials: 100
 seed: 0

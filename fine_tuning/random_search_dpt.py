@@ -57,7 +57,6 @@ SEARCH_FIELD_NAMES = (
     "gate_lr",
     "text_attn_lr",
     "gate_logit_clamp",
-    "tune_batch_size",
     "max_context",
     "target_lag_count",
     "embedding_lag_count",
@@ -106,6 +105,41 @@ class RandomSearchTrialResult:
     test_real_rmse: float | None = None
     test_real_mape: float | None = None
     horizon_metrics: list["HorizonTrialMetrics"] | None = None
+
+
+@dataclass(frozen=True)
+class SplitMetricsBundle:
+    train: RollingMetrics
+    val: RollingMetrics
+    test: RollingMetrics
+
+
+@dataclass(frozen=True)
+class PerHorizonTuneBatchResult:
+    candidate_index: int
+    parent_index: int
+    horizon: int
+    tuning_size_index: int
+    text_attn_layers: list[int]
+    epochs: int
+    gate_lr: float
+    text_attn_lr: float
+    gate_logit_clamp: float | None
+    tune_batch_size: int
+    max_context: int | None
+    target_lag_count: int | None
+    embedding_lag_count: int | None
+    best_epoch: int | None
+    before: SplitMetricsBundle
+    after: SplitMetricsBundle
+    ranking_score: float
+    is_best_for_horizon: bool = False
+
+
+@dataclass(frozen=True)
+class PerHorizonTuneBatchExecutionArtifacts:
+    result: PerHorizonTuneBatchResult
+    assigned_device: str | None = None
 
 
 @dataclass(frozen=True)
@@ -900,11 +934,6 @@ def build_search_choices(
             if search_space_cfg.gate_logit_clamp is not None
             else [base_run_cfg.tuning.gate_logit_clamp]
         ),
-        "tune_batch_size": (
-            search_space_cfg.tune_batch_size
-            if search_space_cfg.tune_batch_size is not None
-            else [base_run_cfg.tuning.tune_batch_size]
-        ),
         "max_context": search_space_cfg.max_context if search_space_cfg.max_context is not None else [base_run_cfg.tuning.max_context],
         "target_lag_count": search_space_cfg.target_lag_count if search_space_cfg.target_lag_count is not None else [None],
         "embedding_lag_count": (
@@ -913,6 +942,15 @@ def build_search_choices(
             else [None]
         ),
     }
+
+
+def build_tune_batch_size_choices(
+    base_run_cfg: DataConfig,
+    search_space_cfg: SearchSpaceConfig,
+) -> list[int]:
+    if search_space_cfg.tune_batch_size is None:
+        return [base_run_cfg.tuning.tune_batch_size]
+    return list(search_space_cfg.tune_batch_size)
 
 
 def count_search_combinations(search_choices: dict[str, list[object]]) -> int:
@@ -937,7 +975,10 @@ def _decode_trial_spec(
             choice = list(choice)
         resolved_values[field_name] = choice
     return RandomSearchTrialSpec(
-        **{field_name: resolved_values[field_name] for field_name in SEARCH_FIELD_NAMES}
+        **{
+            **{field_name: resolved_values[field_name] for field_name in SEARCH_FIELD_NAMES},
+            "tune_batch_size": int(search_choices["_base_tune_batch_size"][0]),
+        }
     )
 
 
@@ -952,6 +993,7 @@ def sample_trial_specs(
         random_search_cfg.search_space,
         lag_search_metadata=lag_search_metadata,
     )
+    search_choices["_base_tune_batch_size"] = [base_run_cfg.tuning.tune_batch_size]
     total_combinations = count_search_combinations(search_choices)
     sampled_count = min(random_search_cfg.trials, total_combinations)
     sampled_indices = random.Random(random_search_cfg.seed).sample(range(total_combinations), k=sampled_count)
@@ -1708,6 +1750,575 @@ def _write_summary_log(
         f.write("\n".join(lines) + "\n")
 
 
+def _evaluate_all_splits(
+    prepared_trial: PreparedFineTuneTrial,
+    *,
+    tuning_cfg,
+) -> SplitMetricsBundle:
+    return SplitMetricsBundle(
+        train=evaluate_prepared_split(
+            prepared_trial,
+            split_name="train",
+            use_text=True,
+            tuning_cfg=tuning_cfg,
+        ),
+        val=evaluate_prepared_split(
+            prepared_trial,
+            split_name="val",
+            use_text=True,
+            tuning_cfg=tuning_cfg,
+        ),
+        test=evaluate_prepared_split(
+            prepared_trial,
+            split_name="test",
+            use_text=True,
+            tuning_cfg=tuning_cfg,
+        ),
+    )
+
+
+def _execute_per_horizon_tune_batch_candidate(
+    trial_cfg: DataConfig,
+    *,
+    candidate_index: int,
+    parent_index: int,
+    horizon: int,
+    tuning_size_index: int,
+    data_splits: FineTuneDataSplits,
+) -> PerHorizonTuneBatchResult:
+    print(
+        f"\n== Shared parameter set {parent_index} | horizon {horizon} | "
+        f"tuning_batch_size {tuning_size_index} ({trial_cfg.tuning.tune_batch_size}) ==\n"
+        f"Used params | text_attn_layers={trial_cfg.model.text_attn_layers} | "
+        f"epochs={trial_cfg.tuning.epochs} | gate_lr={trial_cfg.tuning.gate_lr} | "
+        f"text_attn_lr={trial_cfg.tuning.text_attn_lr} | "
+        f"gate_logit_clamp={trial_cfg.tuning.gate_logit_clamp} | "
+        f"max_context={trial_cfg.tuning.max_context} | "
+        f"target_lag_count={trial_spec_target_lag_count(trial_cfg)} | "
+        f"embedding_lag_count={trial_spec_embedding_lag_count(trial_cfg)}"
+    )
+    set_random_seeds(trial_cfg.seed)
+    prepared_trial = prepare_fine_tune_trial(
+        trial_cfg,
+        data_splits=data_splits,
+        horizon=horizon,
+    )
+    before = _evaluate_all_splits(prepared_trial, tuning_cfg=trial_cfg.tuning)
+    print(
+        "Before tuning | "
+        f"train_mae={before.train.mae:.6f} | val_mae={before.val.mae:.6f} | "
+        f"test_mae={before.test.mae:.6f}"
+    )
+    fine_tune_outcome = fine_tune_prepared_trial(prepared_trial, tuning_cfg=trial_cfg.tuning)
+    after = _evaluate_all_splits(prepared_trial, tuning_cfg=trial_cfg.tuning)
+    ranking_score = objective_score(trial_cfg.tuning.early_stopping_metric, after.val)
+    print(
+        "After tuning | "
+        f"best_epoch={fine_tune_outcome.best_epoch} | objective={ranking_score:.6f} | "
+        f"train_mae={after.train.mae:.6f} | val_mae={after.val.mae:.6f} | "
+        f"test_mae={after.test.mae:.6f}"
+    )
+    return PerHorizonTuneBatchResult(
+        candidate_index=candidate_index,
+        parent_index=parent_index,
+        horizon=horizon,
+        tuning_size_index=tuning_size_index,
+        text_attn_layers=list(trial_cfg.model.text_attn_layers),
+        epochs=trial_cfg.tuning.epochs,
+        gate_lr=trial_cfg.tuning.gate_lr,
+        text_attn_lr=trial_cfg.tuning.text_attn_lr,
+        gate_logit_clamp=trial_cfg.tuning.gate_logit_clamp,
+        tune_batch_size=trial_cfg.tuning.tune_batch_size,
+        max_context=trial_cfg.tuning.max_context,
+        target_lag_count=trial_spec_target_lag_count(trial_cfg),
+        embedding_lag_count=trial_spec_embedding_lag_count(trial_cfg),
+        best_epoch=fine_tune_outcome.best_epoch,
+        before=before,
+        after=after,
+        ranking_score=ranking_score,
+    )
+
+
+def _execute_per_horizon_candidate_with_logging(
+    trial_cfg: DataConfig,
+    *,
+    candidate_index: int,
+    parent_index: int,
+    horizon: int,
+    tuning_size_index: int,
+    data_splits: FineTuneDataSplits,
+    log_path: str | Path,
+    assigned_device: str | None,
+    tee_stdout: bool,
+) -> PerHorizonTuneBatchExecutionArtifacts:
+    resolved_trial_cfg = trial_cfg
+    if assigned_device is not None and assigned_device != trial_cfg.model.device:
+        resolved_trial_cfg = replace(
+            trial_cfg,
+            model=replace(trial_cfg.model, device=assigned_device),
+        )
+
+    log_path = Path(log_path)
+    with log_path.open("w", encoding="utf-8", buffering=1) as log_file:
+        streams: tuple[Any, ...] = (sys.stdout, log_file) if tee_stdout else (log_file,)
+        tee_writer = _TeeWriter(*streams)
+        with contextlib.redirect_stdout(tee_writer), contextlib.redirect_stderr(tee_writer):
+            if assigned_device is not None:
+                print(f"Assigned device | {assigned_device}")
+            result = _execute_per_horizon_tune_batch_candidate(
+                resolved_trial_cfg,
+                candidate_index=candidate_index,
+                parent_index=parent_index,
+                horizon=horizon,
+                tuning_size_index=tuning_size_index,
+                data_splits=data_splits,
+            )
+    return PerHorizonTuneBatchExecutionArtifacts(
+        result=result,
+        assigned_device=assigned_device,
+    )
+
+
+def _run_per_horizon_candidate_batch(
+    candidate_cfgs: dict[int, DataConfig],
+    *,
+    candidate_metadata: dict[int, tuple[int, int, int]],
+    candidate_data_splits: dict[int, FineTuneDataSplits],
+    logs_dir: Path,
+    max_parallel_trials: int,
+    gpu_ids: list[int] | None,
+) -> list[PerHorizonTuneBatchResult]:
+    candidate_items = list(candidate_cfgs.items())
+    if not candidate_items:
+        return []
+
+    if max_parallel_trials <= 1:
+        results: list[PerHorizonTuneBatchResult] = []
+        for candidate_index, candidate_cfg in candidate_items:
+            parent_index, horizon, tuning_size_index = candidate_metadata[candidate_index]
+            artifacts = _execute_per_horizon_candidate_with_logging(
+                candidate_cfg,
+                candidate_index=candidate_index,
+                parent_index=parent_index,
+                horizon=horizon,
+                tuning_size_index=tuning_size_index,
+                data_splits=candidate_data_splits[candidate_index],
+                log_path=logs_dir / f"candidate_{candidate_index:04d}.log",
+                assigned_device=None,
+                tee_stdout=True,
+            )
+            results.append(artifacts.result)
+        return results
+
+    device_slots = _build_parallel_device_slots(
+        max_parallel_trials=max_parallel_trials,
+        gpu_ids=gpu_ids,
+        base_device=candidate_items[0][1].model.device,
+    )
+    print(
+        "Parallel candidate execution enabled | "
+        f"max_parallel_trials={max_parallel_trials} | device_slots={device_slots}"
+    )
+    results: list[PerHorizonTuneBatchResult] = []
+    mp_context = multiprocessing.get_context("spawn")
+    candidate_iter = iter(candidate_items)
+
+    with concurrent.futures.ProcessPoolExecutor(
+        max_workers=len(device_slots),
+        mp_context=mp_context,
+    ) as executor:
+        future_states: dict[concurrent.futures.Future[PerHorizonTuneBatchExecutionArtifacts], tuple[int, str | None]] = {}
+
+        def submit_next(assigned_device: str | None) -> bool:
+            try:
+                next_candidate_index, next_candidate_cfg = next(candidate_iter)
+            except StopIteration:
+                return False
+            parent_index, horizon, tuning_size_index = candidate_metadata[next_candidate_index]
+            future = executor.submit(
+                _execute_per_horizon_candidate_with_logging,
+                next_candidate_cfg,
+                candidate_index=next_candidate_index,
+                parent_index=parent_index,
+                horizon=horizon,
+                tuning_size_index=tuning_size_index,
+                data_splits=candidate_data_splits[next_candidate_index],
+                log_path=str(logs_dir / f"candidate_{next_candidate_index:04d}.log"),
+                assigned_device=assigned_device,
+                tee_stdout=False,
+            )
+            future_states[future] = (next_candidate_index, assigned_device)
+            print(
+                f"Started candidate {next_candidate_index:04d} | parent={parent_index} | "
+                f"horizon={horizon} | tuning_size_index={tuning_size_index} | "
+                f"device={assigned_device or next_candidate_cfg.model.device or 'auto'}"
+            )
+            return True
+
+        for assigned_device in device_slots:
+            if not submit_next(assigned_device):
+                break
+
+        while future_states:
+            done, _ = concurrent.futures.wait(
+                tuple(future_states),
+                return_when=concurrent.futures.FIRST_COMPLETED,
+            )
+            for future in done:
+                submitted_candidate_index, assigned_device = future_states.pop(future)
+                artifacts = future.result()
+                result = artifacts.result
+                if result.candidate_index != submitted_candidate_index:
+                    raise RuntimeError(
+                        "Parallel candidate bookkeeping mismatch: "
+                        f"submitted candidate {submitted_candidate_index} returned {result.candidate_index}."
+                    )
+                results.append(result)
+                print(
+                    f"Completed candidate {result.candidate_index:04d} | parent={result.parent_index} | "
+                    f"horizon={result.horizon} | tune_batch_size={result.tune_batch_size} | "
+                    f"objective={result.ranking_score:.6f} | val_mae={result.after.val.mae:.6f} | "
+                    f"device={artifacts.assigned_device or assigned_device or 'auto'}"
+                )
+                submit_next(assigned_device)
+    return results
+
+
+def _per_horizon_candidate_sort_key(
+    result: PerHorizonTuneBatchResult,
+) -> tuple[float, float, int, int]:
+    return (
+        result.ranking_score,
+        result.after.val.mae,
+        result.parent_index,
+        result.tuning_size_index,
+    )
+
+
+def _metric_to_dict(metrics: RollingMetrics) -> dict[str, float]:
+    return {
+        "loss": metrics.loss,
+        "mae": metrics.mae,
+        "rmse": metrics.rmse,
+        "mape": metrics.mape,
+        "real_mae": metrics.real_mae,
+        "real_rmse": metrics.real_rmse,
+        "real_mape": metrics.real_mape,
+    }
+
+
+def _split_bundle_to_dict(bundle: SplitMetricsBundle) -> dict[str, dict[str, float]]:
+    return {
+        "train": _metric_to_dict(bundle.train),
+        "val": _metric_to_dict(bundle.val),
+        "test": _metric_to_dict(bundle.test),
+    }
+
+
+def _serialize_per_horizon_candidate_result(
+    result: PerHorizonTuneBatchResult,
+    *,
+    rank_in_horizon: int | None = None,
+) -> dict[str, Any]:
+    payload = {
+        "candidate_index": result.candidate_index,
+        "parent_index": result.parent_index,
+        "horizon": result.horizon,
+        "tuning_size_index": result.tuning_size_index,
+        "text_attn_layers": result.text_attn_layers,
+        "epochs": result.epochs,
+        "gate_lr": result.gate_lr,
+        "text_attn_lr": result.text_attn_lr,
+        "gate_logit_clamp": result.gate_logit_clamp,
+        "tune_batch_size": result.tune_batch_size,
+        "max_context": result.max_context,
+        "target_lag_count": result.target_lag_count,
+        "embedding_lag_count": result.embedding_lag_count,
+        "best_epoch": result.best_epoch,
+        "ranking_score": result.ranking_score,
+        "is_best_for_horizon": result.is_best_for_horizon,
+        "before": _split_bundle_to_dict(result.before),
+        "after": _split_bundle_to_dict(result.after),
+    }
+    if rank_in_horizon is not None:
+        payload["rank_in_horizon"] = rank_in_horizon
+    return payload
+
+
+def _candidate_csv_row(
+    result: PerHorizonTuneBatchResult,
+    *,
+    rank_in_horizon: int,
+) -> dict[str, Any]:
+    row: dict[str, Any] = {
+        "rank_in_horizon": rank_in_horizon,
+        "candidate_index": result.candidate_index,
+        "parent_index": result.parent_index,
+        "horizon": result.horizon,
+        "tuning_size_index": result.tuning_size_index,
+        "is_best_for_horizon": result.is_best_for_horizon,
+        "text_attn_layers": json.dumps(result.text_attn_layers),
+        "epochs": result.epochs,
+        "gate_lr": result.gate_lr,
+        "text_attn_lr": result.text_attn_lr,
+        "gate_logit_clamp": result.gate_logit_clamp,
+        "tune_batch_size": result.tune_batch_size,
+        "max_context": result.max_context,
+        "target_lag_count": result.target_lag_count,
+        "embedding_lag_count": result.embedding_lag_count,
+        "best_epoch": result.best_epoch,
+        "ranking_score": result.ranking_score,
+    }
+    for phase_name, bundle in (("before", result.before), ("after", result.after)):
+        for split_name in ("train", "val", "test"):
+            metrics = getattr(bundle, split_name)
+            for metric_name, metric_value in _metric_to_dict(metrics).items():
+                row[f"{phase_name}_{split_name}_{metric_name}"] = metric_value
+    return row
+
+
+def _write_per_horizon_trial_results_csv(
+    output_dir: Path,
+    *,
+    ranked_by_horizon: dict[int, list[PerHorizonTuneBatchResult]],
+) -> None:
+    fieldnames = [
+        "rank_in_horizon",
+        "candidate_index",
+        "parent_index",
+        "horizon",
+        "tuning_size_index",
+        "is_best_for_horizon",
+        "text_attn_layers",
+        "epochs",
+        "gate_lr",
+        "text_attn_lr",
+        "gate_logit_clamp",
+        "tune_batch_size",
+        "max_context",
+        "target_lag_count",
+        "embedding_lag_count",
+        "best_epoch",
+        "ranking_score",
+    ]
+    for phase_name in ("before", "after"):
+        for split_name in ("train", "val", "test"):
+            for metric_name in ("loss", "mae", "rmse", "mape", "real_mae", "real_rmse", "real_mape"):
+                fieldnames.append(f"{phase_name}_{split_name}_{metric_name}")
+
+    with (output_dir / "trial_results.csv").open("w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for horizon in sorted(ranked_by_horizon):
+            for rank, result in enumerate(ranked_by_horizon[horizon], start=1):
+                writer.writerow(_candidate_csv_row(result, rank_in_horizon=rank))
+
+
+def _parent_params_to_dict(result: PerHorizonTuneBatchResult) -> dict[str, Any]:
+    return {
+        "text_attn_layers": result.text_attn_layers,
+        "epochs": result.epochs,
+        "gate_lr": result.gate_lr,
+        "text_attn_lr": result.text_attn_lr,
+        "gate_logit_clamp": result.gate_logit_clamp,
+        "max_context": result.max_context,
+        "target_lag_count": result.target_lag_count,
+        "embedding_lag_count": result.embedding_lag_count,
+    }
+
+
+def _write_per_horizon_summary_json(
+    output_dir: Path,
+    *,
+    random_search_cfg: RandomSearchConfig,
+    objective_metric: str,
+    parent_total_combinations: int,
+    parent_specs: list[RandomSearchTrialSpec],
+    tune_batch_size_choices: list[int],
+    results: list[PerHorizonTuneBatchResult],
+    ranked_by_horizon: dict[int, list[PerHorizonTuneBatchResult]],
+    shared_baseline: SharedBaselineResult,
+) -> None:
+    results_by_parent: dict[int, list[PerHorizonTuneBatchResult]] = {}
+    for result in sorted(results, key=lambda item: (item.parent_index, item.horizon, item.tuning_size_index)):
+        results_by_parent.setdefault(result.parent_index, []).append(result)
+
+    summary = {
+        "base_config": random_search_cfg.base_config,
+        "base_dataset": random_search_cfg.base_dataset,
+        "objective_metric": objective_metric,
+        "max_parallel_trials": random_search_cfg.max_parallel_trials,
+        "gpu_ids": random_search_cfg.gpu_ids,
+        "baseline_evaluations_skipped_per_trial": True,
+        "shared_baseline_evaluated": True,
+        "shared_baseline": _serialize_shared_baseline_result(shared_baseline),
+        "shared_param_trials_requested": random_search_cfg.trials,
+        "shared_param_trials_evaluated": len(parent_specs),
+        "parent_total_combinations": parent_total_combinations,
+        "tune_batch_size_choices": tune_batch_size_choices,
+        "candidate_evaluations": len(results),
+        "top_k_per_horizon": min(random_search_cfg.top_k, max((len(items) for items in ranked_by_horizon.values()), default=0)),
+        "best_by_horizon": {
+            str(horizon): _serialize_per_horizon_candidate_result(ranked_results[0], rank_in_horizon=1)
+            for horizon, ranked_results in sorted(ranked_by_horizon.items())
+            if ranked_results
+        },
+        "top_by_horizon": {
+            str(horizon): [
+                _serialize_per_horizon_candidate_result(result, rank_in_horizon=rank)
+                for rank, result in enumerate(ranked_results[: random_search_cfg.top_k], start=1)
+            ]
+            for horizon, ranked_results in sorted(ranked_by_horizon.items())
+        },
+        "per_parent_results": [
+            {
+                "parent_index": parent_index,
+                "used_params": _parent_params_to_dict(parent_results[0]),
+                "candidates": [
+                    _serialize_per_horizon_candidate_result(result)
+                    for result in parent_results
+                ],
+            }
+            for parent_index, parent_results in sorted(results_by_parent.items())
+        ],
+    }
+    with (output_dir / "summary.json").open("w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2)
+
+
+def _format_metric_triplet(label: str, metrics: RollingMetrics) -> str:
+    return (
+        f"{label}_loss={metrics.loss:.6f} | "
+        f"{label}_mae={metrics.mae:.6f} | "
+        f"{label}_rmse={metrics.rmse:.6f} | "
+        f"{label}_mape={metrics.mape:.6f}% | "
+        f"{label}_real_mae={metrics.real_mae:.6f} | "
+        f"{label}_real_rmse={metrics.real_rmse:.6f} | "
+        f"{label}_real_mape={metrics.real_mape:.6f}%"
+    )
+
+
+def _format_candidate_summary_line(result: PerHorizonTuneBatchResult) -> str:
+    return (
+        f"tuning_batch_size {result.tuning_size_index}/{result.tune_batch_size} | "
+        f"candidate_index={result.candidate_index} | best_for_horizon={str(result.is_best_for_horizon).lower()} | "
+        f"best_epoch={result.best_epoch} | objective={result.ranking_score:.6f} | "
+        f"{_format_metric_triplet('before_train', result.before.train)} | "
+        f"{_format_metric_triplet('before_val', result.before.val)} | "
+        f"{_format_metric_triplet('before_test', result.before.test)} | "
+        f"{_format_metric_triplet('after_train', result.after.train)} | "
+        f"{_format_metric_triplet('after_val', result.after.val)} | "
+        f"{_format_metric_triplet('after_test', result.after.test)}"
+    )
+
+
+def _write_per_horizon_summary_log(
+    output_dir: Path,
+    *,
+    random_search_cfg: RandomSearchConfig,
+    objective_metric: str,
+    parent_total_combinations: int,
+    parent_specs: list[RandomSearchTrialSpec],
+    tune_batch_size_choices: list[int],
+    results: list[PerHorizonTuneBatchResult],
+    ranked_by_horizon: dict[int, list[PerHorizonTuneBatchResult]],
+    shared_baseline: SharedBaselineResult,
+) -> None:
+    results_by_parent_horizon: dict[int, dict[int, list[PerHorizonTuneBatchResult]]] = {}
+    for result in sorted(results, key=lambda item: (item.parent_index, item.horizon, item.tuning_size_index)):
+        results_by_parent_horizon.setdefault(result.parent_index, {}).setdefault(result.horizon, []).append(result)
+
+    lines = [
+        "Random Search Summary",
+        f"base_config: {random_search_cfg.base_config}",
+        f"base_dataset: {random_search_cfg.base_dataset}",
+        f"objective_metric: {objective_metric}",
+        f"max_parallel_trials: {random_search_cfg.max_parallel_trials}",
+        f"gpu_ids: {random_search_cfg.gpu_ids}",
+        "baseline_evaluations_skipped_per_trial: true",
+        "shared_baseline_evaluated: true",
+        f"shared_param_trials_requested: {random_search_cfg.trials}",
+        f"shared_param_trials_evaluated: {len(parent_specs)}",
+        f"parent_total_combinations: {parent_total_combinations}",
+        f"tune_batch_size_choices: {tune_batch_size_choices}",
+        f"candidate_evaluations: {len(results)}",
+        "",
+        "Shared Baseline",
+        (
+            f"params | text_attn_layers={shared_baseline.text_attn_layers} | "
+            f"max_context={shared_baseline.max_context}"
+        ),
+    ]
+    if shared_baseline.per_horizon is not None:
+        lines.append("Shared Baseline By Horizon")
+        for horizon_result in shared_baseline.per_horizon:
+            lines.extend(_format_per_horizon_baseline_lines(horizon_result))
+    lines.append("")
+
+    for parent_index in sorted(results_by_parent_horizon):
+        first_result = next(iter(next(iter(results_by_parent_horizon[parent_index].values()))))
+        lines.append(
+            f"Shared parameter set {parent_index}: Used params | "
+            f"text_attn_layers={first_result.text_attn_layers} | "
+            f"epochs={first_result.epochs} | gate_lr={first_result.gate_lr} | "
+            f"text_attn_lr={first_result.text_attn_lr} | "
+            f"gate_logit_clamp={first_result.gate_logit_clamp} | "
+            f"max_context={first_result.max_context} | "
+            f"target_lag_count={first_result.target_lag_count} | "
+            f"embedding_lag_count={first_result.embedding_lag_count}"
+        )
+        for horizon in sorted(results_by_parent_horizon[parent_index]):
+            lines.append(f"Model horizon {horizon}:")
+            for result in results_by_parent_horizon[parent_index][horizon]:
+                lines.append(_format_candidate_summary_line(result))
+            lines.append("")
+
+    lines.append("Best By Horizon")
+    for horizon, ranked_results in sorted(ranked_by_horizon.items()):
+        best = ranked_results[0]
+        lines.append(
+            f"horizon={horizon} | parent_index={best.parent_index} | "
+            f"tune_batch_size={best.tune_batch_size} | best_epoch={best.best_epoch} | "
+            f"objective={best.ranking_score:.6f} | val_mae={best.after.val.mae:.6f} | "
+            f"test_mae={best.after.test.mae:.6f}"
+        )
+    lines.append("")
+
+    for horizon, ranked_results in sorted(ranked_by_horizon.items()):
+        top_limit = min(random_search_cfg.top_k, len(ranked_results))
+        lines.append(f"Top {top_limit} Candidates For Horizon {horizon}")
+        for rank, result in enumerate(ranked_results[:top_limit], start=1):
+            lines.append(
+                f"{rank}. candidate_index={result.candidate_index} | parent_index={result.parent_index} | "
+                f"tune_batch_size={result.tune_batch_size} | best_epoch={result.best_epoch} | "
+                f"objective={result.ranking_score:.6f} | val_mae={result.after.val.mae:.6f} | "
+                f"test_mae={result.after.test.mae:.6f}"
+            )
+        lines.append("")
+
+    with (output_dir / "summary.log").open("w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+
+def _write_best_fine_tune_configs_by_horizon(
+    output_dir: Path,
+    *,
+    candidate_cfgs: dict[int, DataConfig],
+    ranked_by_horizon: dict[int, list[PerHorizonTuneBatchResult]],
+) -> dict[int, DataConfig]:
+    best_cfgs: dict[int, DataConfig] = {}
+    for horizon, ranked_results in sorted(ranked_by_horizon.items()):
+        best = ranked_results[0]
+        best_cfg = candidate_cfgs[best.candidate_index]
+        best_cfgs[horizon] = best_cfg
+        with (output_dir / f"best_fine_tune_config_horizon_{horizon:02d}.yaml").open("w", encoding="utf-8") as f:
+            yaml.safe_dump(asdict(best_cfg), f, sort_keys=False)
+    if 1 in best_cfgs:
+        with (output_dir / "best_fine_tune_config.yaml").open("w", encoding="utf-8") as f:
+            yaml.safe_dump(asdict(best_cfgs[1]), f, sort_keys=False)
+    return best_cfgs
+
+
 def run_random_search(
     random_search_cfg: RandomSearchConfig,
     *,
@@ -1749,19 +2360,23 @@ def run_random_search(
             f"embedding_lag_count_choices={random_search_cfg.search_space.embedding_lag_count}"
         )
 
-    trial_specs, total_combinations = sample_trial_specs(
+    parent_specs, parent_total_combinations = sample_trial_specs(
         base_run_cfg,
         random_search_cfg,
         lag_search_metadata=lag_search_metadata,
     )
-    if random_search_cfg.trials > total_combinations:
+    tune_batch_size_choices = build_tune_batch_size_choices(base_run_cfg, random_search_cfg.search_space)
+    if random_search_cfg.trials > parent_total_combinations:
         print(
             f"Requested {random_search_cfg.trials} trials but search space has only "
-            f"{total_combinations} combinations; clamping to {total_combinations}."
+            f"{parent_total_combinations} parent combinations; clamping to {parent_total_combinations}."
         )
+    candidate_count = len(parent_specs) * base_run_cfg.prediction_window * len(tune_batch_size_choices)
     print(
-        f"Random search space | total_combinations={total_combinations} | "
-        f"running_trials={len(trial_specs)} | seed={random_search_cfg.seed}"
+        f"Random search space | parent_total_combinations={parent_total_combinations} | "
+        f"running_shared_param_sets={len(parent_specs)} | "
+        f"tune_batch_size_choices={tune_batch_size_choices} | "
+        f"candidate_evaluations={candidate_count} | seed={random_search_cfg.seed}"
     )
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1778,207 +2393,139 @@ def run_random_search(
         logs_dir=logs_dir,
     )
 
-    trial_cfgs: dict[int, DataConfig] = {}
-    trial_data_splits: dict[int, FineTuneDataSplits] = {}
+    parent_cfgs: dict[int, DataConfig] = {}
+    parent_data_splits: dict[int, FineTuneDataSplits] = {}
     data_splits_cache: dict[tuple[int | None, int | None], FineTuneDataSplits] = {
         _trial_data_cache_key(target_lag_count=None, embedding_lag_count=None): data_splits
     }
-    for trial_index, trial_spec in enumerate(trial_specs, start=1):
-        trial_cfg = resolve_trial_config(
+    for parent_index, parent_spec in enumerate(parent_specs, start=1):
+        parent_cfg = resolve_trial_config(
             base_run_cfg,
-            trial_spec,
+            parent_spec,
             lag_search_metadata=lag_search_metadata,
         )
-        trial_cfgs[trial_index] = trial_cfg
+        parent_cfgs[parent_index] = parent_cfg
         data_key = _trial_data_cache_key(
-            target_lag_count=trial_spec.target_lag_count,
-            embedding_lag_count=trial_spec.embedding_lag_count,
+            target_lag_count=parent_spec.target_lag_count,
+            embedding_lag_count=parent_spec.embedding_lag_count,
         )
         if data_key not in data_splits_cache:
-            data_splits_cache[data_key] = load_and_split_fine_tune_data(trial_cfg)
-        trial_data_splits[trial_index] = data_splits_cache[data_key]
+            data_splits_cache[data_key] = load_and_split_fine_tune_data(parent_cfg)
+        parent_data_splits[parent_index] = data_splits_cache[data_key]
 
-    results, checkpoint_paths = _run_trial_batch(
-        trial_cfgs,
-        trial_data_splits=trial_data_splits,
+    candidate_cfgs: dict[int, DataConfig] = {}
+    candidate_metadata: dict[int, tuple[int, int, int]] = {}
+    candidate_data_splits: dict[int, FineTuneDataSplits] = {}
+    candidate_index = 0
+    for parent_index, parent_cfg in parent_cfgs.items():
+        for horizon in range(1, base_run_cfg.prediction_window + 1):
+            for tuning_size_index, tune_batch_size in enumerate(tune_batch_size_choices, start=1):
+                candidate_index += 1
+                candidate_cfgs[candidate_index] = replace(
+                    parent_cfg,
+                    tuning=replace(
+                        parent_cfg.tuning,
+                        tune_batch_size=tune_batch_size,
+                    ),
+                )
+                candidate_metadata[candidate_index] = (parent_index, horizon, tuning_size_index)
+                candidate_data_splits[candidate_index] = parent_data_splits[parent_index]
+
+    results = _run_per_horizon_candidate_batch(
+        candidate_cfgs,
+        candidate_metadata=candidate_metadata,
+        candidate_data_splits=candidate_data_splits,
         logs_dir=logs_dir,
-        checkpoints_dir=checkpoints_dir,
-        top_k=random_search_cfg.top_k,
         max_parallel_trials=random_search_cfg.max_parallel_trials,
         gpu_ids=random_search_cfg.gpu_ids,
     )
 
     if not results:
-        raise RuntimeError("Random search did not execute any trials.")
+        raise RuntimeError("Random search did not execute any candidate evaluations.")
 
-    ranked_results = sorted(results, key=trial_sort_key)
-    best_result = ranked_results[0]
-    best_run_cfg = trial_cfgs[best_result.trial_index]
-    top_limit = min(random_search_cfg.top_k, len(ranked_results))
-    top_trial_indices = {result.trial_index for result in ranked_results[:top_limit]}
-    deleted_non_top_k = _delete_checkpoint_files(
-        checkpoint_paths,
-        keep_trial_indices=top_trial_indices,
+    results_by_horizon: dict[int, list[PerHorizonTuneBatchResult]] = {}
+    for result in results:
+        results_by_horizon.setdefault(result.horizon, []).append(result)
+    ranked_by_horizon = {
+        horizon: sorted(horizon_results, key=_per_horizon_candidate_sort_key)
+        for horizon, horizon_results in sorted(results_by_horizon.items())
+    }
+    best_candidate_indices = {
+        ranked_results[0].candidate_index
+        for ranked_results in ranked_by_horizon.values()
+        if ranked_results
+    }
+    results = [
+        replace(result, is_best_for_horizon=result.candidate_index in best_candidate_indices)
+        for result in results
+    ]
+    results_by_candidate = {result.candidate_index: result for result in results}
+    ranked_by_horizon = {
+        horizon: [results_by_candidate[result.candidate_index] for result in ranked_results]
+        for horizon, ranked_results in ranked_by_horizon.items()
+    }
+
+    print("\n== Random Search Best Candidates By Horizon ==")
+    for horizon, ranked_results in sorted(ranked_by_horizon.items()):
+        best = ranked_results[0]
+        print(
+            f"horizon={horizon} | parent_index={best.parent_index} | "
+            f"candidate_index={best.candidate_index} | tune_batch_size={best.tune_batch_size} | "
+            f"best_epoch={best.best_epoch} | objective={best.ranking_score:.6f} | "
+            f"val_mae={best.after.val.mae:.6f} | test_mae={best.after.test.mae:.6f}"
+        )
+
+    best_run_cfgs = _write_best_fine_tune_configs_by_horizon(
+        output_dir,
+        candidate_cfgs=candidate_cfgs,
+        ranked_by_horizon=ranked_by_horizon,
     )
-    if deleted_non_top_k > 0:
-        print(
-            f"Deleted {deleted_non_top_k} temporary checkpoint(s) for non-top-ranked trials."
-        )
-    print(f"\nEvaluating top {top_limit} ranked trial(s) on the test split...")
-    ranked_results_with_test = list(ranked_results)
-    ranked_index_by_trial = {result.trial_index: idx for idx, result in enumerate(ranked_results_with_test)}
-    for rank, result in enumerate(ranked_results[:top_limit], start=1):
-        trial_cfg = trial_cfgs[result.trial_index]
-        checkpoint_path = checkpoint_paths[result.trial_index]
-        checkpoint_bundle = torch.load(checkpoint_path, map_location="cpu")
-        _delete_checkpoint_file(checkpoint_path)
-        del checkpoint_paths[result.trial_index]
-        if not isinstance(checkpoint_bundle, dict):
-            raise RuntimeError(
-                f"Expected checkpoint bundle dict for trial {result.trial_index}, got {type(checkpoint_bundle)!r}."
-            )
-
-        horizon_test_metrics: list[RollingMetrics] = []
-        updated_horizon_metrics: list[HorizonTrialMetrics] = []
-        horizon_metrics_source = result.horizon_metrics or [
-            HorizonTrialMetrics(
-                horizon=1,
-                best_epoch=result.best_epoch,
-                val_loss=result.val_loss,
-                val_mae=result.val_mae,
-                val_rmse=result.val_rmse,
-                val_mape=result.val_mape,
-                val_real_mae=result.val_real_mae,
-                val_real_rmse=result.val_real_rmse,
-                val_real_mape=result.val_real_mape,
-            )
-        ]
-        for horizon_metric in horizon_metrics_source:
-            prepared_trial = prepare_fine_tune_trial(
-                trial_cfg,
-                data_splits=trial_data_splits[result.trial_index],
-                horizon=horizon_metric.horizon,
-            )
-            _load_text_mixing_state_dict(
-                prepared_trial.reg.model,
-                checkpoint_bundle[horizon_metric.horizon],
-            )
-            test_metrics = evaluate_prepared_split(
-                prepared_trial,
-                split_name="test",
-                use_text=True,
-                tuning_cfg=trial_cfg.tuning,
-            )
-            horizon_test_metrics.append(test_metrics)
-            updated_horizon_metrics.append(
-                replace(
-                    horizon_metric,
-                    test_loss=test_metrics.loss,
-                    test_mae=test_metrics.mae,
-                    test_rmse=test_metrics.rmse,
-                    test_mape=test_metrics.mape,
-                    test_real_mae=test_metrics.real_mae,
-                    test_real_rmse=test_metrics.real_rmse,
-                    test_real_mape=test_metrics.real_mape,
-                )
-            )
-
-        test_metrics = _mean_rolling_metrics(horizon_test_metrics)
-        ranked_results_with_test[ranked_index_by_trial[result.trial_index]] = replace(
-            result,
-            test_loss=test_metrics.loss,
-            test_mae=test_metrics.mae,
-            test_rmse=test_metrics.rmse,
-            test_mape=test_metrics.mape,
-            test_real_mae=test_metrics.real_mae,
-            test_real_rmse=test_metrics.real_rmse,
-            test_real_mape=test_metrics.real_mape,
-            horizon_metrics=updated_horizon_metrics,
-        )
-        _append_test_metrics_to_trial_log(
-            logs_dir,
-            trial_index=result.trial_index,
-            rank=rank,
-            metrics=test_metrics,
-            horizon_metrics=updated_horizon_metrics,
-        )
-        print(
-            f"Test rank {rank} | trial_index={result.trial_index} | "
-            f"test_mae={test_metrics.mae:.6f} | test_rmse={test_metrics.rmse:.6f} | "
-            f"test_mape={test_metrics.mape:.6f}% | "
-            f"test_real_mae={test_metrics.real_mae:.6f} | "
-            f"test_real_rmse={test_metrics.real_rmse:.6f} | "
-            f"test_real_mape={test_metrics.real_mape:.6f}%"
-        )
-    print("Deleted all temporary HPO checkpoint bundles after test evaluation.")
-    ranked_results = ranked_results_with_test
-    best_result = ranked_results[0]
-    print(
-        "\n== Random Search Best Trial ==\n"
-        f"Rank 1 | trial_index={best_result.trial_index} | "
-        f"best_epoch={best_result.best_epoch} | "
-        f"objective={best_result.ranking_score:.6f} | "
-        f"val_mae={best_result.val_mae:.6f} | "
-        f"test_mae={best_result.test_mae:.6f} | "
-        f"test_real_mae={best_result.test_real_mae:.6f} | "
-        f"target_lag_count={best_result.target_lag_count} | "
-        f"embedding_lag_count={best_result.embedding_lag_count}"
-    )
-
-    print(f"Top {top_limit} trials:")
-    for rank, result in enumerate(ranked_results[:top_limit], start=1):
-        print(
-            f"{rank}. trial_index={result.trial_index} | best_epoch={result.best_epoch} | "
-            f"objective={result.ranking_score:.6f} | "
-            f"val_mae={result.val_mae:.6f} | test_mae={result.test_mae:.6f} | "
-            f"test_real_mae={result.test_real_mae:.6f} | "
-            f"text_attn_layers={result.text_attn_layers} | "
-            f"target_lag_count={result.target_lag_count} | "
-            f"embedding_lag_count={result.embedding_lag_count}"
-        )
-        if result.horizon_metrics is not None:
-            for metrics in result.horizon_metrics:
-                print(
-                    f"   horizon={metrics.horizon} | best_epoch={metrics.best_epoch} | "
-                    f"val_mae={metrics.val_mae:.6f} | test_mae={metrics.test_mae:.6f} | "
-                    f"test_real_mae={metrics.test_real_mae:.6f}"
-                )
-
-    _write_trial_results_csv(output_dir, ranked_results)
-    _write_best_fine_tune_config(output_dir, best_run_cfg=best_run_cfg)
-    _write_summary_json(
+    _write_per_horizon_trial_results_csv(output_dir, ranked_by_horizon=ranked_by_horizon)
+    _write_per_horizon_summary_json(
         output_dir,
         random_search_cfg=random_search_cfg,
-        objective_metric=best_run_cfg.tuning.early_stopping_metric,
-        total_combinations=total_combinations,
-        ranked_results=ranked_results,
+        objective_metric=base_run_cfg.tuning.early_stopping_metric,
+        parent_total_combinations=parent_total_combinations,
+        parent_specs=parent_specs,
+        tune_batch_size_choices=tune_batch_size_choices,
+        results=results,
+        ranked_by_horizon=ranked_by_horizon,
         shared_baseline=shared_baseline,
     )
-    _write_summary_log(
+    _write_per_horizon_summary_log(
         output_dir,
         random_search_cfg=random_search_cfg,
-        objective_metric=best_run_cfg.tuning.early_stopping_metric,
-        total_combinations=total_combinations,
-        ranked_results=ranked_results,
+        objective_metric=base_run_cfg.tuning.early_stopping_metric,
+        parent_total_combinations=parent_total_combinations,
+        parent_specs=parent_specs,
+        tune_batch_size_choices=tune_batch_size_choices,
+        results=results,
+        ranked_by_horizon=ranked_by_horizon,
         shared_baseline=shared_baseline,
     )
+    first_best = ranked_by_horizon[min(ranked_by_horizon)][0]
     return {
         "output_dir": str(output_dir),
         "logs_dir": str(logs_dir),
         "checkpoints_dir": str(checkpoints_dir),
-        "ranked_results": ranked_results,
+        "candidate_results": results,
+        "ranked_by_horizon": ranked_by_horizon,
         "shared_baseline": shared_baseline,
         "best_test_metrics": RollingMetrics(
-            loss=best_result.test_loss,
-            mae=best_result.test_mae,
-            rmse=best_result.test_rmse,
-            mape=best_result.test_mape,
-            real_mae=best_result.test_real_mae,
-            real_rmse=best_result.test_real_rmse,
-            real_mape=best_result.test_real_mape,
+            loss=first_best.after.test.loss,
+            mae=first_best.after.test.mae,
+            rmse=first_best.after.test.rmse,
+            mape=first_best.after.test.mape,
+            real_mae=first_best.after.test.real_mae,
+            real_rmse=first_best.after.test.real_rmse,
+            real_mape=first_best.after.test.real_mape,
         ),
-        "best_run_cfg": best_run_cfg,
-        "total_combinations": total_combinations,
+        "best_run_cfg": best_run_cfgs.get(1, next(iter(best_run_cfgs.values()))),
+        "best_run_cfgs_by_horizon": best_run_cfgs,
+        "shared_param_trial_specs": parent_specs,
+        "tune_batch_size_choices": tune_batch_size_choices,
+        "parent_total_combinations": parent_total_combinations,
+        "total_combinations": parent_total_combinations,
     }
 
 

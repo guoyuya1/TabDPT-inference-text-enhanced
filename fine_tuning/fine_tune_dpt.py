@@ -149,6 +149,10 @@ class FineTuneOutcome:
 class HorizonRunResult:
     horizon: int
     best_epoch: int
+    tuned_no_text_val_normalized: MetricTriplet
+    tuned_no_text_val_real: MetricTriplet
+    tuned_text_val_normalized: MetricTriplet
+    tuned_text_val_real: MetricTriplet
     tuned_no_text_test_normalized: MetricTriplet
     tuned_no_text_test_real: MetricTriplet
     tuned_text_test_normalized: MetricTriplet
@@ -2207,6 +2211,44 @@ def _run_single_horizon(
         y_eval_level=train_y_eval_level,
         previous_level=train_previous_level,
     )
+    val_context_proc, val_y_context, val_text_context, val_eval_proc, val_y_eval, val_y_eval_real, val_text_eval, val_y_eval_level = (
+        _prepared_eval_inputs(prepared_trial, split_name="val")
+    )
+    _, val_previous_level = _target_differencing_level_eval_context(prepared_trial, "val")
+    tuned_no_text_val = evaluate_rolling(
+        reg,
+        X_context_proc=val_context_proc,
+        y_context=val_y_context,
+        text_context=val_text_context,
+        X_eval_proc=val_eval_proc,
+        y_eval=val_y_eval,
+        y_eval_real=val_y_eval_real,
+        text_eval=val_text_eval,
+        use_text=False,
+        label="Val (no text attn)",
+        max_context=run_cfg.tuning.max_context,
+        target_scaler=prepared_trial.target_scaler,
+        horizon=horizon,
+        y_eval_level=val_y_eval_level,
+        previous_level=val_previous_level,
+    )
+    tuned_text_val = evaluate_rolling(
+        reg,
+        X_context_proc=val_context_proc,
+        y_context=val_y_context,
+        text_context=val_text_context,
+        X_eval_proc=val_eval_proc,
+        y_eval=val_y_eval,
+        y_eval_real=val_y_eval_real,
+        text_eval=val_text_eval,
+        use_text=True,
+        label="Val (with text attn)",
+        max_context=run_cfg.tuning.max_context,
+        target_scaler=prepared_trial.target_scaler,
+        horizon=horizon,
+        y_eval_level=val_y_eval_level,
+        previous_level=val_previous_level,
+    )
     test_context_proc, test_y_context, test_text_context, test_eval_proc, test_y_eval, test_y_eval_real, test_text_eval, test_y_eval_level = (
         _prepared_eval_inputs(prepared_trial, split_name="test")
     )
@@ -2328,6 +2370,10 @@ def _run_single_horizon(
     return HorizonRunResult(
         horizon=horizon,
         best_epoch=fine_tune_outcome.best_epoch,
+        tuned_no_text_val_normalized=tuned_no_text_val[0],
+        tuned_no_text_val_real=tuned_no_text_val[1],
+        tuned_text_val_normalized=tuned_text_val[0],
+        tuned_text_val_real=tuned_text_val[1],
         tuned_no_text_test_normalized=tuned_no_text_test[0],
         tuned_no_text_test_real=tuned_no_text_test[1],
         tuned_text_test_normalized=tuned_text_test[0],
@@ -2382,6 +2428,16 @@ def main() -> None:
 
     if len(horizon_results) > 1:
         print("\n================ Mean Summary Across Horizons ================")
+        _format_dual_metrics(
+            "Mean val (no text attn)",
+            _mean_metric_triplets([result.tuned_no_text_val_normalized for result in horizon_results]),
+            _mean_metric_triplets([result.tuned_no_text_val_real for result in horizon_results]),
+        )
+        _format_dual_metrics(
+            "Mean val (with text attn)",
+            _mean_metric_triplets([result.tuned_text_val_normalized for result in horizon_results]),
+            _mean_metric_triplets([result.tuned_text_val_real for result in horizon_results]),
+        )
         _format_dual_metrics(
             "Mean test (no text attn)",
             _mean_metric_triplets([result.tuned_no_text_test_normalized for result in horizon_results]),

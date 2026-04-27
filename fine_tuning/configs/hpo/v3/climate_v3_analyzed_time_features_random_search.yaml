@@ -1,4 +1,4 @@
-base_config: ../../v3/bitcoin_v3_analyzed_time_features.yaml
+base_config: ../../v3/climate_v3_analyzed_time_features.yaml
 base_dataset: null
 trials: 100
 seed: 0

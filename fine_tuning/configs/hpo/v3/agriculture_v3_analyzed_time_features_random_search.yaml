@@ -1,6 +1,6 @@
 base_config: ../../v3/agriculture_v3_analyzed_time_features.yaml
 base_dataset: null
-trials: 50
+trials: 100
 seed: 0
 max_parallel_trials: 8
 gpu_ids: [0, 1]
@@ -15,8 +15,8 @@ search_space:
     - [1, 2, 16]
     - [4, 8, 12, 16]
   epochs: [100]
-  gate_lr: [0.03, 0.05, 0.1, 0.2, 0.3]
-  text_attn_lr: [0.0003, 0.001, 0.003, 0.01, 0.03]
-  gate_logit_clamp: [5.0, 10.0]
-  tune_batch_size: [32, 64, 128, 256]
-  max_context: [64, 128, 256, 500]
+  gate_lr: [0.01, 0.05, 0.1]
+  text_attn_lr: [0.0003, 0.001, 0.003, 0.01]
+  gate_logit_clamp: [5.0]
+  tune_batch_size: [8, 16, 32, 64, 128]
+  max_context: [16, 32, 64, 128]

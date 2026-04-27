@@ -1,12 +1,9 @@
-data_path: /home/yuyan/tabdpt_mz/data/processed_data/agriculture/v3/agriculture_gpt_analyzed_embedding.csv
+data_path: /home/yuyan/tabdpt_mz/data/processed_data/social_good/v3/social_good_gpt_analyzed_embedding.csv
 date_column: date
 calendar_frequency: month
 seasonality_k: 3
+seasonality_L: null
 numeric_features:
-- Wholesale broiler composite_lag1
-- Wholesale broiler composite_lag2
-- Retail-wholesale spread for broiler composite_lag1
-- Retail-wholesale spread for broiler composite_lag2
 - OT_lag1
 - OT_lag2
 - OT_lag3
@@ -38,32 +35,38 @@ embedding_columns:
 - embedding_search_fact_summary_gpt_5_2_lag2
 - embedding_search_fact_summary_gpt_5_2_lag3
 embedding_column_template: null
-seed: 0
-prediction_window: 6
 max_rows: 120
 context_ratio: 0.2
 train_ratio: 0.6
 val_ratio: 0.1
 test_ratio: 0.1
+seed: 0
 model:
   device: auto
   model_weight_path: null
-  text_attn_layers: [1,16]
+  text_attn_layers:
+  - 1
+  - 2
+  - 16
   use_flash: true
   compile_model: true
 tuning:
-  epochs: 30
-  gate_lr: 0.1
-  text_attn_lr: 0.01
-  gate_logit_clamp: 10.0
-  tune_batch_size: 256
-  max_context: 500
+  epochs: 100
+  gate_lr: 0.3
+  text_attn_lr: 0.03
+  gate_logit_clamp: 5.0
+  tune_batch_size: 8
+  max_context: 64
   debug_text_effect: true
   log_text_mixing_params: true
   step_log_every: 50
   early_stopping_patience: 3
+  loss_type: l1
   log_text_score_stats: true
   text_score_sample_size: 8
+  early_stopping_metric: mae
   attention_dropout_p: 0.1
-  text_qk_norm: rmsnorm
+  qk_norm_type: rmsnorm
   text_attention_logit_l2: 0.001
+  log_test_metrics_each_epoch: false
+prediction_window: 6

@@ -1,0 +1,209 @@
+data_path: /home/yuyan/tabdpt_mz/data/processed_data/climate/v3/climate_gpt_analyzed_embedding.csv
+date_column: date
+calendar_frequency: week
+seasonality_k: 3
+numeric_features:
+- MapDate_lag1
+- MapDate_lag2
+- MapDate_lag3
+- MapDate_lag4
+- MapDate_lag5
+- MapDate_lag6
+- MapDate_lag7
+- MapDate_lag8
+- MapDate_lag9
+- MapDate_lag10
+- MapDate_lag11
+- MapDate_lag12
+- MapDate_lag13
+- MapDate_lag14
+- MapDate_lag15
+- MapDate_lag16
+- MapDate_lag17
+- MapDate_lag18
+- MapDate_lag19
+- MapDate_lag20
+- MapDate_lag21
+- MapDate_lag22
+- MapDate_lag23
+- MapDate_lag24
+- D0_lag1
+- D0_lag2
+- D0_lag3
+- D0_lag4
+- D0_lag5
+- D0_lag6
+- D0_lag7
+- D0_lag8
+- D0_lag9
+- D0_lag10
+- D0_lag11
+- D0_lag12
+- D0_lag13
+- D0_lag14
+- D0_lag15
+- D0_lag16
+- D0_lag17
+- D0_lag18
+- D0_lag19
+- D0_lag20
+- D0_lag21
+- D0_lag22
+- D0_lag23
+- D0_lag24
+- D1_lag1
+- D1_lag2
+- D1_lag3
+- D1_lag4
+- D1_lag5
+- D1_lag6
+- D1_lag7
+- D1_lag8
+- D1_lag9
+- D1_lag10
+- D1_lag11
+- D1_lag12
+- D1_lag13
+- D1_lag14
+- D1_lag15
+- D1_lag16
+- D1_lag17
+- D1_lag18
+- D1_lag19
+- D1_lag20
+- D1_lag21
+- D1_lag22
+- D1_lag23
+- D1_lag24
+- D2_lag1
+- D2_lag2
+- D2_lag3
+- D2_lag4
+- D2_lag5
+- D2_lag6
+- D2_lag7
+- D2_lag8
+- D2_lag9
+- D2_lag10
+- D2_lag11
+- D2_lag12
+- D2_lag13
+- D2_lag14
+- D2_lag15
+- D2_lag16
+- D2_lag17
+- D2_lag18
+- D2_lag19
+- D2_lag20
+- D2_lag21
+- D2_lag22
+- D2_lag23
+- D2_lag24
+- D3_lag1
+- D3_lag2
+- D3_lag3
+- D3_lag4
+- D3_lag5
+- D3_lag6
+- D3_lag7
+- D3_lag8
+- D3_lag9
+- D3_lag10
+- D3_lag11
+- D3_lag12
+- D3_lag13
+- D3_lag14
+- D3_lag15
+- D3_lag16
+- D3_lag17
+- D3_lag18
+- D3_lag19
+- D3_lag20
+- D3_lag21
+- D3_lag22
+- D3_lag23
+- D3_lag24
+- D4_lag1
+- D4_lag2
+- D4_lag3
+- D4_lag4
+- D4_lag5
+- D4_lag6
+- D4_lag7
+- D4_lag8
+- D4_lag9
+- D4_lag10
+- D4_lag11
+- D4_lag12
+- D4_lag13
+- D4_lag14
+- D4_lag15
+- D4_lag16
+- D4_lag17
+- D4_lag18
+- D4_lag19
+- D4_lag20
+- D4_lag21
+- D4_lag22
+- D4_lag23
+- D4_lag24
+- StatisticFormatID_lag1
+- StatisticFormatID_lag2
+- StatisticFormatID_lag3
+- StatisticFormatID_lag4
+- StatisticFormatID_lag5
+- StatisticFormatID_lag6
+- StatisticFormatID_lag7
+- StatisticFormatID_lag8
+- StatisticFormatID_lag9
+- StatisticFormatID_lag10
+- StatisticFormatID_lag11
+- StatisticFormatID_lag12
+- StatisticFormatID_lag13
+- StatisticFormatID_lag14
+- StatisticFormatID_lag15
+- StatisticFormatID_lag16
+- StatisticFormatID_lag17
+- StatisticFormatID_lag18
+- StatisticFormatID_lag19
+- StatisticFormatID_lag20
+- StatisticFormatID_lag21
+- StatisticFormatID_lag22
+- StatisticFormatID_lag23
+- StatisticFormatID_lag24
+target_column: OT
+embedding_lags: []
+embedding_columns:
+- embedding_search_fact_summary_gpt_5_2_lag1
+- embedding_search_fact_summary_gpt_5_2_lag2
+- embedding_search_fact_summary_gpt_5_2_lag3
+embedding_column_template: null
+seed: 0
+prediction_window: 6
+max_rows: 120
+context_ratio: 0.2
+train_ratio: 0.6
+val_ratio: 0.1
+test_ratio: 0.1
+model:
+  device: auto
+  model_weight_path: null
+  text_attn_layers: [1,16]
+  use_flash: true
+  compile_model: true
+tuning:
+  epochs: 30
+  gate_lr: 0.1
+  text_attn_lr: 0.01
+  gate_logit_clamp: 10.0
+  tune_batch_size: 256
+  max_context: 1000
+  debug_text_effect: true
+  log_text_mixing_params: true
+  step_log_every: 50
+  early_stopping_patience: 3
+  log_text_score_stats: true
+  text_score_sample_size: 8
+  attention_dropout_p: 0.1
+  text_qk_norm: rmsnorm
+  text_attention_logit_l2: 0.001
