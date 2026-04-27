@@ -20,7 +20,7 @@ test_ratio: 0.1
 
 feature_search:
   max_context: [447]
-  target_lag_count: [2, 4, 6, 8, 12, 16]
+  target_lag_count: [0, 2, 4, 8, 12, 16, 24]
   covariate_lag_count: [0, 1, 2, 4]
   include_calendar_features: true
   include_seasonal_features: true
