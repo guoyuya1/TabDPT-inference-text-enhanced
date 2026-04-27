@@ -1,10 +1,14 @@
-data_path: /home/yuyan/tabdpt_mz/data/trimmed/agriculture_gpt_analyzed_embedding_all_rows_embedding_lags_1_2_3.csv
+data_path: /home/yuyan/tabdpt_mz/data/trimmed/climate_gpt_analyzed_embedding_all_rows_embedding_lags_1_2_3.csv
 date_column: date
-calendar_frequency: month
+calendar_frequency: week
 seasonality_k: 3
 numeric_features:
-  - Wholesale broiler composite
-  - Retail-wholesale spread for broiler composite
+  - MapDate
+  - D0
+  - D1
+  - D2
+  - D3
+  - StatisticFormatID
   - OT
 target_column: OT
 embedding_lags: []
@@ -12,14 +16,14 @@ embedding_columns: null
 embedding_column_template: null
 seed: 0
 prediction_window: 6
-max_rows: 288
+max_rows: 1252
 context_ratio: 0.2
 train_ratio: 0.6
 val_ratio: 0.1
 test_ratio: 0.1
 
 feature_search:
-  max_context: [288]
+  max_context: [1252]
   target_lag_count: [2, 4, 8, 12, 16, 24]
   covariate_lag_count: [0, 1, 2, 4]
   include_calendar_features: true

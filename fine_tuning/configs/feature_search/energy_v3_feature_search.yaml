@@ -1,0 +1,35 @@
+data_path: /home/yuyan/tabdpt_mz/data/trimmed/energy_gpt_analyzed_embedding_all_rows_embedding_lags_1_2_3.csv
+date_column: date
+calendar_frequency: week
+seasonality_k: 3
+numeric_features:
+  - Weekly East Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)
+  - Weekly New England (PADD 1A) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)
+  - Weekly Central Atlantic (PADD 1B) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)
+  - Weekly Lower Atlantic (PADD 1C) All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)
+  - Weekly Midwest All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)
+  - Weekly Gulf Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)
+  - Weekly Rocky Mountain All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)
+  - Weekly West Coast All Grades All Formulations Retail Gasoline Prices  (Dollars per Gallon)
+  - OT
+target_column: OT
+embedding_lags: []
+embedding_columns: null
+embedding_column_template: null
+seed: 0
+prediction_window: 6
+max_rows: 1622
+context_ratio: 0.2
+train_ratio: 0.6
+val_ratio: 0.1
+test_ratio: 0.1
+
+feature_search:
+  max_context: [1622]
+  target_lag_count: [2, 4, 6, 8, 12, 16]
+  covariate_lag_count: [0, 1, 2, 4]
+  include_calendar_features: true
+  include_seasonal_features: true
+  normalize: true
+  max_parallel_trialsper_gpu: 4
+  gpu_ids: [0, 1]

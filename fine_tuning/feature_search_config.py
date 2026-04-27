@@ -11,6 +11,28 @@ from .fine_tune_configs import (
 )
 
 
+def _validate_gpu_ids(name: str, values: object) -> list[int] | None:
+    if values is None:
+        return None
+    if not isinstance(values, list):
+        raise ValueError(f"{name} must be a list when provided.")
+    if not values:
+        raise ValueError(f"{name} must be non-empty when provided.")
+
+    validated_values: list[int] = []
+    seen_values: set[int] = set()
+    for value in values:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{name} must contain only non-negative integers.")
+        if value < 0:
+            raise ValueError(f"{name} must contain only non-negative integers.")
+        if value in seen_values:
+            raise ValueError(f"{name} must not contain duplicate GPU ids.")
+        validated_values.append(value)
+        seen_values.add(value)
+    return validated_values
+
+
 @dataclass(frozen=True)
 class FeatureSearchConfig:
     max_context: list[int | None]
@@ -19,6 +41,8 @@ class FeatureSearchConfig:
     include_calendar_features: bool = True
     include_seasonal_features: bool = True
     normalize: bool = True
+    max_parallel_trialsper_gpu: int = 1
+    gpu_ids: list[int] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -48,6 +72,19 @@ class FeatureSearchConfig:
             value = getattr(self, field_name)
             if not isinstance(value, bool):
                 raise ValueError(f"feature_search.{field_name} must be a boolean.")
+        object.__setattr__(
+            self,
+            "max_parallel_trialsper_gpu",
+            _validate_positive_int(
+                "feature_search.max_parallel_trialsper_gpu",
+                self.max_parallel_trialsper_gpu,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "gpu_ids",
+            _validate_gpu_ids("feature_search.gpu_ids", self.gpu_ids),
+        )
 
 
 @dataclass(frozen=True, kw_only=True)
