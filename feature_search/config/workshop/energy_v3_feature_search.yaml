@@ -26,10 +26,10 @@ test_ratio: 0.1
 
 feature_search:
   max_context: [1622]
-  target_lag_count: [0, 2, 4, 8, 12, 16, 24]
-  covariate_lag_count: [0, 1, 2, 4]
+  target_lag_count: [0, 2, 4, 8, 12, 16]
+  covariate_lag_count: [8] # [0, 2, 4, 8]
   include_calendar_features: true
   include_seasonal_features: true
   normalize: true
-  max_parallel_trialsper_gpu: 4
+  max_parallel_trialsper_gpu: 8
   gpu_ids: [0, 1]

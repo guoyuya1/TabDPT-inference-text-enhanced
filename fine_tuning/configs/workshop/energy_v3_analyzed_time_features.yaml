@@ -1,4 +1,4 @@
-data_path: /home/yuyan/tabdpt_mz/data/processed_data/energy/v3/Energy_gpt_analyzed_embedding.csv
+data_path: /home/yuyan/tabdpt_mz/data/trimmed/energy_gpt_analyzed_embedding_all_rows_embedding_lags_1_2_3.csv
 date_column: date
 calendar_frequency: week
 seasonality_k: 3
@@ -31,18 +31,18 @@ numeric_features:
 - OT_lag10
 - OT_lag11
 - OT_lag12
-# - OT_lag13
-# - OT_lag14
-# - OT_lag15
-# - OT_lag16
-# - OT_lag17
-# - OT_lag18
-# - OT_lag19
-# - OT_lag20
-# - OT_lag21
-# - OT_lag22
-# - OT_lag23
-# - OT_lag24
+- OT_lag13
+- OT_lag14
+- OT_lag15
+- OT_lag16
+- OT_lag17
+- OT_lag18
+- OT_lag19
+- OT_lag20
+- OT_lag21
+- OT_lag22
+- OT_lag23
+- OT_lag24
 target_column: OT
 embedding_lags: []
 embedding_columns:
@@ -52,7 +52,7 @@ embedding_columns:
 embedding_column_template: null
 seed: 0
 prediction_window: 6
-max_rows: 120
+max_rows: 1622
 context_ratio: 0.2
 train_ratio: 0.6
 val_ratio: 0.1
@@ -69,7 +69,7 @@ tuning:
   text_attn_lr: 0.01
   gate_logit_clamp: 10.0
   tune_batch_size: 256
-  max_context: 1000
+  max_context: 1622
   debug_text_effect: true
   log_text_mixing_params: true
   step_log_every: 50

@@ -122,6 +122,7 @@ class SearchSpaceConfig:
     tune_batch_size: list[int] | None = None
     max_context: list[int | None] | None = None
     target_lag_count: list[int] | None = None
+    covariate_lag_count: list[int] | None = None
     embedding_lag_count: list[int] | None = None
 
     def __post_init__(self) -> None:
@@ -164,6 +165,20 @@ class SearchSpaceConfig:
             self,
             "target_lag_count",
             _validate_int_choices("search_space.target_lag_count", self.target_lag_count),
+        )
+        object.__setattr__(
+            self,
+            "covariate_lag_count",
+            _validate_int_choices(
+                "search_space.covariate_lag_count",
+                self.covariate_lag_count,
+                allow_none_values=False,
+            )
+            if self.covariate_lag_count is None
+            else [
+                _validate_non_negative_int("search_space.covariate_lag_count", value)
+                for value in self.covariate_lag_count
+            ],
         )
         object.__setattr__(
             self,
