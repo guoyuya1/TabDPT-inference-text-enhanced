@@ -815,7 +815,7 @@ def run_feature_search(
 
     config_stem = resolved_config_path.stem.replace(" ", "_")
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_base = Path(output_root) if output_root is not None else Path("results") / "hpo"
+    output_base = Path(output_root) if output_root is not None else Path("results") / "feature_search"
     output_dir = output_base / f"{config_stem}_feature_search_baseline_{timestamp}"
     output_dir.mkdir(parents=True, exist_ok=False)
 
@@ -905,7 +905,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run TabDPT baseline feature search without text attention.")
     parser.add_argument("--config", required=True, help="Path to the feature-search YAML config.")
     parser.add_argument("--dataset", default=None, help="Optional dataset override for multi-dataset configs.")
-    parser.add_argument("--output-root", default=None, help="Optional output root. Defaults to results/hpo.")
+    parser.add_argument("--output-root", default=None, help="Optional output root. Defaults to results/feature_search.")
     args = parser.parse_args()
 
     result = run_feature_search(
