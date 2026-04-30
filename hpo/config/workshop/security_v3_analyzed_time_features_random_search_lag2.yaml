@@ -1,6 +1,6 @@
-base_config: /home/yuyan/tabdpt_mz/fine_tuning/configs/workshop/climate_v3_analyzed_time_features.yaml
+base_config: /home/yuyan/tabdpt_mz/fine_tuning/configs/workshop/security_v3_analyzed.yaml
 base_dataset: null
-trials: 60
+trials: 30
 seed: 0
 max_parallel_trials: 16
 gpu_ids: [0, 1]
@@ -21,7 +21,7 @@ search_space:
   gate_lr: [0.01, 0.05, 0.1]
   text_attn_lr: [0.0003, 0.001, 0.003, 0.01]
   gate_logit_clamp: [5.0]
-  max_context: [1252]
-  target_lag_count: [12]
-  covariate_lag_count: [2]
-  tune_batch_size: [32, 64, 128, 256]
+  max_context: [288]
+  target_lag_count: [2] # [2,4,8,12] # 244444444`1
+  covariate_lag_count: [0]
+  tune_batch_size: [16, 32, 64, 128]

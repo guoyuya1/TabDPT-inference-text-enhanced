@@ -1,20 +1,8 @@
-data_path: /home/yuyan/tabdpt_mz/data/trimmed/climate_gpt_analyzed_embedding_all_rows_embedding_lags_1_2_3.csv
+data_path: /home/yuyan/tabdpt_mz/data/trimmed/health_afr_gpt_analyzed_embedding.csv
 date_column: date
 calendar_frequency: week
 seasonality_k: 3
 numeric_features:
-- MapDate_lag1
-- MapDate_lag2
-- D0_lag1
-- D0_lag2
-- D1_lag1
-- D1_lag2
-- D2_lag1
-- D2_lag2
-- D3_lag1
-- D3_lag2
-- StatisticFormatID_lag1
-- StatisticFormatID_lag2
 - OT_lag1
 - OT_lag2
 - OT_lag3
@@ -48,7 +36,7 @@ embedding_columns:
 embedding_column_template: null
 seed: 0
 prediction_window: 6
-max_rows: 1252
+max_rows: 1243
 context_ratio: 0.2
 train_ratio: 0.6
 val_ratio: 0.1
@@ -65,7 +53,7 @@ tuning:
   text_attn_lr: 0.01
   gate_logit_clamp: 10.0
   tune_batch_size: 256
-  max_context: 1252
+  max_context: 1243
   debug_text_effect: true
   log_text_mixing_params: true
   step_log_every: 50
